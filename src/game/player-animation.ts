@@ -32,6 +32,6 @@ export function getSideWalkPose(traveledPixels: number): SideWalkPose {
 }
 
 export function getSideWalkSprite(facing: Extract<PlayerFacing, 'left' | 'right'>, traveledPixels: number): { frame: number; flipX: boolean } {
-  const phase = Math.floor(Math.max(0, traveledPixels) / 24) % 4;
+  const phase = Math.floor(Math.max(0, traveledPixels) / 48) % 4;
   return { frame: phase, flipX: facing === 'left' };
 }

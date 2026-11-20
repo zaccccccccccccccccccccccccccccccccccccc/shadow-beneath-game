@@ -133,11 +133,12 @@ describe('level route data', () => {
     expect(sceneKeys).toEqual(['intro', 'tutorial', 'act-one', 'next-patch']);
   });
 
-  it('uses an automatic three-beat prologue before the tutorial', () => {
+  it('automatically introduces the CCAC invitation before the tutorial', () => {
     expect(prologueCards).toHaveLength(5);
     expect(prologueAutoAdvanceMs).toBeGreaterThanOrEqual(1800);
-    expect(prologueCards[0].speaker).toBe('榮姐');
-    expect(prologueCards.map((card) => card.actor)).toEqual(['rong-jie', 'rong-jie', 'rong-jie', 'player', 'rong-jie']);
+    expect(prologueCards[0].speaker).toBe('蓉姐');
+    expect(prologueCards[0].title).toContain('CCAC');
+    expect(prologueCards.map((card) => card.actor)).toEqual(['rong-jie', 'player', 'rong-jie', 'player', 'rong-jie']);
   });
 
   it('keeps pointer navigation available throughout the tutorial', () => {

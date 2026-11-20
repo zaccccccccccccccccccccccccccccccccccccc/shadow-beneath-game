@@ -2,14 +2,14 @@ export type TutorialStep = 'move' | 'observe' | 'exit';
 
 export const sceneKeys = ['intro', 'tutorial', 'act-one', 'next-patch'] as const;
 
-export const prologueAutoAdvanceMs = 2600;
+export const prologueAutoAdvanceMs = 4200;
 
 export const prologueCards = [
-  { actor: 'rong-jie', speaker: '榮姐', kicker: '澳門 · 雨夜', title: '沒有署名的信', body: '雨水還未乾，信已經在監察組的門縫裡。' },
-  { actor: 'rong-jie', speaker: '榮姐', kicker: '南灣項目', title: '被抽走的一頁', body: '審批快得不尋常，附件裡卻少了一頁帳。' },
-  { actor: 'rong-jie', speaker: '榮姐', kicker: '調查之前', title: '先分清看見與聽說', body: '一封信只是起點。你需要找到能互相印證的人與事。' },
-  { actor: 'player', speaker: '你', kicker: '你的第一夜', title: '接過這盞燈', body: '今晚先記下事實，再去問那些有名字的人。' },
-  { actor: 'rong-jie', speaker: '榮姐', kicker: '路線已標記', title: '從街燈下出發', body: '先學會走近，之後去舊城、海邊，讓每條線索自己說話。' },
+  {"actor":"rong-jie","speaker":"蓉姐","kicker":"一份邀請","title":"歡迎來到 CCAC","body":"「你的見習申請通過了。」蓉姐把邀請函推到桌前，「明天，和我一起走進街區。」"},
+  {"actor":"player","speaker":"你","kicker":"報到前一晚","title":"我能做甚麼？","body":"「我認得這些街道，也認得街坊。但我還不知道，怎樣才算真正看清一件事。」"},
+  {"actor":"rong-jie","speaker":"蓉姐","kicker":"第一天 · 廉政公署","title":"先走近，再判斷","body":"「唔好靠估，行過去睇。每個人都有自己的理由。先聽、先記錄，再核對。」"},
+  {"actor":"player","speaker":"你","kicker":"接過工作證","title":"從一名見習生開始","body":"「我會把看見的和聽說的分開。暫時不知道的，就先寫下不知道。」"},
+  {"actor":"rong-jie","speaker":"蓉姐","kicker":"街燈亮起","title":"我們出發吧","body":"蓉姐拿起外套：「先熟悉總部和街區。每份檔案開始時，我再告訴你這次要查甚麼。」"},
 ] as const;
 
 export function allowsPointerNavigation(_: TutorialStep): boolean {

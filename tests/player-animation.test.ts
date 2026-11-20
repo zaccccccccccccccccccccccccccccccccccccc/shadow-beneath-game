@@ -31,7 +31,7 @@ describe('player walk-cycle direction mapping', () => {
   });
 
   it('uses the approved right-side source frames and mirrors them for left movement', () => {
-    expect([0, 24, 48, 72].map(d => getSideWalkSprite('right', d).frame)).toEqual([0, 1, 2, 3]);
-    expect([0, 24, 48, 72].map(d => getSideWalkSprite('left', d).flipX)).toEqual([true, true, true, true]);
+    expect([0, 48, 96, 144].map(d => getSideWalkSprite('right', d).frame)).toEqual([0, 1, 2, 3]);
+    expect([0, 48, 96, 144].map(d => getSideWalkSprite('left', d).flipX)).toEqual([true, true, true, true]);
   });
 });

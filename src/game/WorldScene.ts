@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { createWorldFruitLayout, fruitDescriptions, QUIZ_COOLDOWN_MS, cooldownSeconds, questionDifficulty, type WorldFruit } from './fruit-world';
 import { getSpirit } from './spirits';
 import { thirdActSteps, completeThirdActStep, thirdActComplete } from './act-three';
 import { getChapterFruitSpots, spiritQuestions, spiritNames, fruitNames, type AvailableSpirit } from './chapter-fruits';
@@ -94,10 +95,29 @@ export class WorldScene extends Phaser.Scene {
   private get companionProgress(): CompanionProgress { return this.spiritProgress[this.selectedSpirit]; }
   private set companionProgress(value: CompanionProgress) { this.spiritProgress[this.selectedSpirit] = value; }
 
+  private fruitLayout: WorldFruit[] | null = null;
+  private quizRetryAt = 0;
+  private quizTimer?: Phaser.GameObjects.Text;
+  private activeQuestionIndex = 0;
+  private correctFirst = true;
+
   private availableFruitSpots() {
-    const all = getChapterFruitSpots(this.chapter).filter(spot => !this.spiritProgress[spot.spiritId].claimedSnackIds.includes(spot.id));
-    return all.filter(spot => !all.some(other => other.region === spot.region && other.x === spot.x && other.y === spot.y && other.act > spot.act));
+    if (!this.fruitLayout) {
+      let seed = Math.floor(Math.random() * 4294967296);
+      try {
+        const saved = localStorage.getItem('under-shadow-fruit-layout-seed-v1');
+        if (saved !== null && Number.isFinite(Number(saved))) seed = Number(saved);
+        localStorage.setItem('under-shadow-fruit-layout-seed-v1', String(seed));
+      } catch { /* Keep stable positions for this session. */ }
+      this.fruitLayout = createWorldFruitLayout(seed);
+    }
+    return this.fruitLayout.filter((spot): spot is WorldFruit & { spiritId: AvailableSpirit } => spot.act <= this.chapter && spot.act <= 3 && !this.spiritProgress[spot.spiritId as AvailableSpirit].claimedSnackIds.includes(spot.id));
   }
+
+  private ownsSpirit(id: AvailableSpirit): boolean {
+    return id === 'xiezhi' ? this.companionUnlocked : id === 'baize' ? this.secondAct.rewardClaimed : this.thirdReward;
+  }
+
   private secondAct = createActTwoState();
   private chapterTitle?: Phaser.GameObjects.Text;
   private secondActConcluded = false;
@@ -230,16 +250,16 @@ export class WorldScene extends Phaser.Scene {
     if (this.baizeFollower) {
       const dx = this.player.x - 100 - this.baizeFollower.x;
       const dy = this.player.y + 32 - this.baizeFollower.y;
-      const moving = this.walking && Math.hypot(dx, dy) > 4;
+      const moving = this.walking;
       this.baizeFollower.setPosition(this.baizeFollower.x + dx * Math.min(1, delta / 220), this.baizeFollower.y + dy * Math.min(1, delta / 220));
-      this.baizeFollower.setTexture('world-baize-' + getCompanionGrowthStage(this.spiritProgress.baize.fed).id, moving ? Math.floor(this.time.now / 220) % 4 : 0).setDisplaySize(getCompanionGrowthStage(this.spiritProgress.baize.fed).size, getCompanionGrowthStage(this.spiritProgress.baize.fed).size * 724 / 543).setFlipX(this.facing === 'left').setDepth(getFeetDepth(this.baizeFollower.y));
+      this.baizeFollower.setTexture('world-baize-' + getCompanionGrowthStage(this.spiritProgress.baize.fed).id, moving ? Math.floor(this.gaitDistance / 48) % 4 : 0).setDisplaySize(getCompanionGrowthStage(this.spiritProgress.baize.fed).size, getCompanionGrowthStage(this.spiritProgress.baize.fed).size * 724 / 543).setFlipX(this.facing === 'left').setDepth(getFeetDepth(this.baizeFollower.y));
     }
     if (this.pixiuFollower) {
       const p = this.pixiuFollower;
       p.x += (this.player.x + 90 - p.x) * Math.min(1, delta / 240);
       p.y += (this.player.y + 35 - p.y) * Math.min(1, delta / 240);
       const stage = getCompanionGrowthStage(this.spiritProgress.pixiu.fed);
-      p.setTexture('world-pixiu-' + stage.id, this.walking ? Math.floor(this.time.now / 220) % 4 : 0).setFlipX(this.facing === 'left').setDisplaySize(stage.size, stage.size * 724 / 543).setDepth(getFeetDepth(p.y));
+      p.setTexture('world-pixiu-' + stage.id, this.walking ? Math.floor(this.gaitDistance / 48) % 4 : 0).setFlipX(this.facing === 'left').setDisplaySize(stage.size, stage.size * 724 / 543).setDepth(getFeetDepth(p.y));
     }
     const companion = this.companion;
     if (!companion) return;
@@ -254,12 +274,12 @@ export class WorldScene extends Phaser.Scene {
     const dy = target.y - companion.y;
     // Animate gait only while the player is actively walking. The pet may
     // finish easing into place, but its legs stop with the player's input.
-    const moving = this.walking && Math.hypot(dx, dy) > 0.55;
+    const moving = this.walking;
     companion.setPosition(companion.x + dx * follow, companion.y + dy * follow);
     const pose = getCompanionPose(dx, dy, moving, this.companionPhase);
-    if (moving) this.companionPhase += delta * 0.009;
+    if (moving) this.companionPhase += delta / 240;
     const col = ({ front: 0, left: 1, right: 2, back: 3 } as const)[this.facing];
-    const row = moving ? (Math.floor(this.companionPhase / 0.55) % 2) + 1 : (Math.floor(this.time.now / 900) % 5 === 0 ? 3 : 0);
+    const row = moving ? (Math.floor(this.companionPhase) % 2) + 1 : (Math.floor(this.time.now / 900) % 5 === 0 ? 3 : 0);
     const stage = getCompanionGrowthStage(this.spiritProgress.xiezhi.fed);
     companion.setTexture('xiezhi-sprites', row * 4 + col).setFlipX(false).setDisplaySize(stage.size, stage.size);
     applyCompanionForm(companion, this.spiritProgress.xiezhi.fed, this.facing, moving, this.companionPhase);
@@ -336,6 +356,14 @@ export class WorldScene extends Phaser.Scene {
       .setDisplaySize(WIDTH, HEIGHT).setScrollFactor(0).setDepth(65);
     try { this.companionUnlocked = localStorage.getItem('under-shadow-xiezhi-chapter1-claimed-v2') === 'true'; } catch { this.companionUnlocked = false; }
     this.loadCompanionProgress();
+    try { this.quizRetryAt = Number(localStorage.getItem('under-shadow-quiz-retry-at-v1')) || 0; } catch { /* No active cooldown. */ }
+    for (const id of ['xiezhi','baize','pixiu'] as AvailableSpirit[]) {
+      this.spiritProgress[id].claimedSnackIds = this.spiritProgress[id].claimedSnackIds.map(key => {
+        const oldIndex = companionSnackSpots.findIndex(spot => key === spot.id || key === id + ':' + spot.id);
+        return oldIndex < 0 ? key : id + ':fruit-' + oldIndex;
+      });
+    }
+    this.saveCompanionProgress();
     this.populateArea(this.area);
     if (this.companionUnlocked) {
       this.spawnCompanion();
@@ -369,6 +397,10 @@ export class WorldScene extends Phaser.Scene {
   }
 
   update(_: number, delta: number): void {
+    if (this.quizTimer?.active) {
+      const seconds = cooldownSeconds(this.quizRetryAt, Date.now());
+      this.quizTimer.setText(seconds ? '答錯冷卻中 · ' + seconds + ' 秒後可再試' : '每題答錯需冷卻30秒 · 果實會留在原地');
+    }
     this.handleKeys();
     this.syncGameUi();
     if (!this.transitioning && !this.dialogueLayer && !this.companionLayer && !this.mapLayerUi && !this.notebookLayer && !this.helpLayer && !this.chapterLayer) this.movePlayer(delta);
@@ -461,7 +493,7 @@ export class WorldScene extends Phaser.Scene {
         const marker = this.add.container(spot.x, spot.y).setDepth(getFeetDepth(spot.y) + 1);
         const glow = this.add.circle(0, -28, 45, 0xffca61, 0.20);
         const food = this.add.image(0, -28, 'fruit-' + spot.spiritId).setDisplaySize(68, 68);
-        const label = localizedText(this, 0, 19, getLocale() === 'zh-Hans' ? `${spiritNames[spot.spiritId]} · ${fruitNames[spot.spiritId]}` : `${spiritNames[spot.spiritId]} · ${fruitNames[spot.spiritId]}`, { fontSize: '14px', color: '#fff0bd', backgroundColor: '#102631dd', padding: { x: 8, y: 4 } }).setOrigin(.5);
+        const label = localizedText(this, 0, 19, this.ownsSpirit(spot.spiritId) ? spiritNames[spot.spiritId] + ' · ' + fruitNames[spot.spiritId] : '神秘的果實 · 用途未知', { fontSize: '14px', color: '#fff0bd', backgroundColor: '#102631dd', padding: { x: 8, y: 4 } }).setOrigin(.5);
         marker.add([glow, food, label]);
         this.tweens.add({ targets: [glow, food], y: '+=7', duration: 850, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
         this.areaActors.push(marker);
@@ -819,7 +851,7 @@ export class WorldScene extends Phaser.Scene {
     }
     const col = ({ front: 0, left: 1, right: 2, back: 3 } as const)[this.facing];
     const row = this.walking
-      ? (Math.floor(this.gaitDistance / 24) % 2) + 1
+      ? (Math.floor(this.gaitDistance / 48) % 2) + 1
       : (Math.floor(this.time.now / 220) % 19 === 0 ? 3 : 0);
     this.actorSprite.setTexture('player-walk-cycle', row * 4 + col).setFlipX(false)
       .setDisplaySize(PLAYER_DISPLAY_WIDTH[this.facing], PLAYER_DISPLAY_HEIGHT).setY(0).setAngle(0);
@@ -1525,18 +1557,19 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private companionCopy(): { intro: string; question: string; answers: [string, string]; win: string; lose: string; snack: string; stage: string; feed: string } {
-    const spot = getChapterFruitSpots(this.chapter).find(candidate => candidate.id === this.activeSnackId);
+    const known = this.ownsSpirit(this.selectedSpirit);
     const zhHans = getLocale() === 'zh-Hans';
-    const [question, correct, wrong] = spiritQuestions[this.selectedSpirit][spot?.questionIndex ?? 0];
-    const win = '答對了！' + fruitNames[this.selectedSpirit] + '已存入專屬背包。';
-    const lose = '先回到這隻精靈的品德，再想一想。';
+    const [rawQuestion, correct, wrong] = spiritQuestions[this.selectedSpirit][this.activeQuestionIndex];
+    const question = known ? rawQuestion : rawQuestion.replaceAll(spiritNames[this.selectedSpirit], '這枚果實的氣息');
+    const win = '答對了！' + (known ? fruitNames[this.selectedSpirit] : '神秘的果實') + '已存入背包。' + fruitDescriptions[this.selectedSpirit];
+    const lose = '這個判斷還不夠周全。請仔細比較選項，30秒後再試。果實仍在原地。';
     const stageId = getCompanionGrowthStage(this.companionProgress.fed).id;
     const form = getSpirit(this.selectedSpirit).forms.find(form => form.id === stageId)!;
     const stage = zhHans ? form.hans : form.hant;
     return {
       intro: spiritNames[this.selectedSpirit] + '只接受' + fruitNames[this.selectedSpirit] + '。每幕六道專屬問題；累計投餵3次成長，6次進入守護形態。未領取精靈前可先收集果實。',
       question,
-      answers: [correct, wrong],
+      answers: this.correctFirst ? [correct, wrong] : [wrong, correct],
       win,
       lose,
       snack: zhHans ? `零食 ${this.companionProgress.snacks} · 投喂 ${this.companionProgress.fed}/6 · 3次成长，6次守护` : `零食 ${this.companionProgress.snacks} · 投餵 ${this.companionProgress.fed}/6 · 3次成長，6次守護`,
@@ -1557,7 +1590,11 @@ export class WorldScene extends Phaser.Scene {
   private openSnackQuiz(snackId: string): void {
     if (this.companionLayer || this.dialogueLayer || this.chapterLayer) return;
     this.activeSnackId = snackId;
-    this.selectedSpirit = getChapterFruitSpots(this.chapter).find(spot => spot.id === snackId)?.spiritId ?? 'xiezhi';
+    const spot = this.availableFruitSpots().find(spot => spot.id === snackId);
+    if (!spot) return;
+    this.selectedSpirit = spot.spiritId;
+    this.activeQuestionIndex = Math.min(5, this.companionProgress.claimedSnackIds.length);
+    this.correctFirst = Math.random() < .5;
     this.companionPanelMode = 'quiz';
     this.renderCompanionPanel();
   }
@@ -1572,19 +1609,23 @@ export class WorldScene extends Phaser.Scene {
     layer.add(this.add.rectangle(WIDTH / 2, HEIGHT / 2, WIDTH, HEIGHT, 0x071019, .68));
     layer.add(this.add.rectangle(WIDTH / 2, HEIGHT / 2, 1050, 580, 0x102a37, .98).setStrokeStyle(3, 0xe9c66f));
     const form = getCompanionGrowthStage(this.companionProgress.fed);
-    layer.add(this.add.image(460, 620, this.selectedSpirit !== 'xiezhi' ? 'world-' + this.selectedSpirit + '-' + form.id : form.id === 'young' ? 'xiezhi-sprites' : `companion-${form.id}`, 0).setDisplaySize(form.id === 'young' ? 230 : 300, this.selectedSpirit === 'xiezhi' && form.id === 'young' ? 230 : (form.id === 'young' ? 230 : 300) * 724 / 543).setOrigin(.5, 1));
+    const portrait = this.add.image(460, 620, this.selectedSpirit !== 'xiezhi' ? 'world-' + this.selectedSpirit + '-' + form.id : form.id === 'young' ? 'xiezhi-sprites' : `companion-${form.id}`, 0).setDisplaySize(form.id === 'young' ? 230 : 300, this.selectedSpirit === 'xiezhi' && form.id === 'young' ? 230 : (form.id === 'young' ? 230 : 300) * 724 / 543).setOrigin(.5, 1);
+    if (!this.ownsSpirit(this.selectedSpirit)) portrait.setTexture('fruit-' + this.selectedSpirit).setDisplaySize(150,150).setY(510);
+    layer.add(portrait);
+    this.quizTimer = localizedText(this, 800, 592, '', {fontSize:'16px',color:'#e9c66f'}).setOrigin(.5);
+    layer.add(this.quizTimer);
     layer.add(localizedText(this, 650, 228, getLocale() === 'zh-Hans' ? '伙伴档案 · 触碰回应' : '夥伴檔案 · 觸碰回應', { fontSize: '19px', color: '#e9c66f' }));
-    layer.add(localizedText(this, 650, 282, spiritNames[this.selectedSpirit] + ' · ' + fruitNames[this.selectedSpirit], { fontSize: '35px', color: '#fff0cf', fontStyle: 'bold' }));
+    layer.add(localizedText(this, 650, 282, this.ownsSpirit(this.selectedSpirit) ? spiritNames[this.selectedSpirit] + ' · ' + fruitNames[this.selectedSpirit] : '神秘的果實 · 用途未知', { fontSize: '28px', color: '#fff0cf', fontStyle: 'bold' }));
     layer.add(localizedText(this, 650, 336, copy.snack, { fontSize: '18px', color: '#a7c9be' }));
     layer.add(localizedText(this, 650, 363, copy.stage, { fontSize: '17px', color: '#e9c66f', fontStyle: 'bold' }));
-    const body = this.companionPanelMode === 'intro' ? copy.intro : this.companionPanelMode === 'quiz' ? copy.question : this.companionPanelMode === 'feed' ? copy.feed : message || copy.win;
+    const body = this.companionPanelMode === 'intro' ? copy.intro + '\n' + fruitDescriptions[this.selectedSpirit] : this.companionPanelMode === 'quiz' ? fruitDescriptions[this.selectedSpirit] + '\n【第' + (this.activeQuestionIndex + 1) + '/6題 · ' + questionDifficulty(this.activeQuestionIndex) + '】' + copy.question : this.companionPanelMode === 'feed' ? copy.feed : message || copy.win;
     layer.add(localizedText(this, 650, 395, wrapCjkText(body, 30), { fontSize: '21px', color: '#e8e9da', lineSpacing: 10 }));
     if (this.companionPanelMode === 'intro') {
       if (this.companionProgress.snacks > 0) this.addButton(layer, 770, 650, 260, getLocale() === 'zh-Hans' ? '投喂零食' : '投餵零食', () => this.feedCompanion(), true);
       this.addButton(layer, 1110, 650, 250, getLocale() === 'zh-Hans' ? '继续探索' : '繼續探索', () => this.closeCompanionPanel(), true);
     } else if (this.companionPanelMode === 'quiz') {
-      this.addButton(layer, 770, 650, 300, copy.answers[0], () => this.answerCompanionQuiz(true), true);
-      this.addButton(layer, 1130, 650, 300, copy.answers[1], () => this.answerCompanionQuiz(false), true);
+      this.addButton(layer, 770, 650, 300, copy.answers[0], () => this.answerCompanionQuiz(this.correctFirst), true);
+      this.addButton(layer, 1130, 650, 300, copy.answers[1], () => this.answerCompanionQuiz(!this.correctFirst), true);
     } else if (this.companionPanelMode === 'result') {
       if (this.companionLastAnswerCorrect && this.companionProgress.snacks > 0) this.addButton(layer, 770, 650, 260, getLocale() === 'zh-Hans' ? '立即投喂' : '立即投餵', () => this.feedCompanion(), true);
       if (!this.companionLastAnswerCorrect) this.addButton(layer, 770, 650, 260, getLocale() === 'zh-Hans' ? '再想想' : '再想想', () => this.startCompanionQuiz(), true);
@@ -1595,8 +1636,13 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
-  private startCompanionQuiz(): void { this.companionPanelMode = 'quiz'; this.renderCompanionPanel(); }
+  private startCompanionQuiz(): void { if (cooldownSeconds(this.quizRetryAt, Date.now())) return; this.companionPanelMode = 'quiz'; this.renderCompanionPanel(); }
   private answerCompanionQuiz(correct: boolean): void {
+    if (cooldownSeconds(this.quizRetryAt, Date.now())) return;
+    if (!correct) {
+      this.quizRetryAt = Date.now() + QUIZ_COOLDOWN_MS;
+      try { localStorage.setItem('under-shadow-quiz-retry-at-v1', String(this.quizRetryAt)); } catch { /* Keep session cooldown. */ }
+    }
     const copy = this.companionCopy();
     this.companionLastAnswerCorrect = correct;
     if (correct && this.activeSnackId) {
@@ -1642,8 +1688,8 @@ export class WorldScene extends Phaser.Scene {
     if (hitsButton(x, y, 1110, 650, 250, this.touchLayout ? 88 : 54) && this.companionPanelMode === 'intro') { this.closeCompanionPanel(); return; }
     if (this.companionPanelMode === 'intro' && this.companionProgress.snacks > 0 && hitsButton(x, y, 770, 650, 260, this.touchLayout ? 88 : 54)) { this.feedCompanion(); return; }
     if (this.companionPanelMode === 'quiz') {
-      if (hitsButton(x, y, 770, 650, 300, this.touchLayout ? 88 : 54)) { this.answerCompanionQuiz(true); return; }
-      if (hitsButton(x, y, 1130, 650, 300, this.touchLayout ? 88 : 54)) { this.answerCompanionQuiz(false); return; }
+      if (hitsButton(x, y, 770, 650, 300, this.touchLayout ? 88 : 54)) { this.answerCompanionQuiz(this.correctFirst); return; }
+      if (hitsButton(x, y, 1130, 650, 300, this.touchLayout ? 88 : 54)) { this.answerCompanionQuiz(!this.correctFirst); return; }
     }
     if (this.companionPanelMode === 'result') {
       if (this.companionLastAnswerCorrect && this.companionProgress.snacks > 0 && hitsButton(x, y, 770, 650, 260, this.touchLayout ? 88 : 54)) { this.feedCompanion(); return; }

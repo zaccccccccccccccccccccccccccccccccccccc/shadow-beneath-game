@@ -11,7 +11,7 @@ export function loadCompanionForms(scene: Phaser.Scene): void {
 export function applyCompanionForm(sprite: Phaser.GameObjects.Sprite, fed: number, facing: string, moving: boolean, phase: number): void {
   const stage = getCompanionGrowthStage(fed);
   if (stage.id === 'young') return;
-  const frame = moving ? Math.floor(phase / 1.8) % 4 : 0;
+  const frame = moving ? Math.floor(phase) % 4 : 0;
   sprite.setTexture(`companion-${stage.id}`, frame).setFlipX(facing === 'left');
   sprite.setDisplaySize(stage.size * 1.25, stage.size * 1.25 * 724 / 543);
 }

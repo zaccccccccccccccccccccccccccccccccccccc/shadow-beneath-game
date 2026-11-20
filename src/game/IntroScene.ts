@@ -39,6 +39,8 @@ export class IntroScene extends Phaser.Scene {
     const background = this.add.image(WIDTH / 2, HEIGHT / 2, 'intro-courtyard').setDisplaySize(WIDTH, HEIGHT).setTint(0x65737c);
     this.add.rectangle(WIDTH / 2, HEIGHT / 2, WIDTH, HEIGHT, 0x071019, 0.67);
     this.add.rectangle(WIDTH / 2, HEIGHT / 2, WIDTH, HEIGHT, 0x0e2531, 0.19);
+    localizedText(this, 92, 82, 'CCAC  /  見習生的第一天', { fontSize: '24px', color: '#f1d79a', letterSpacing: 3 });
+    localizedText(this, 92, 122, '陰影之下 · 序幕', { fontSize: '18px', color: '#afc6c5' });
     const lanternGlow = this.add.circle(WIDTH * 0.69, HEIGHT * 0.58, 225, 0xe9b64d, 0.08).setBlendMode(Phaser.BlendModes.ADD);
     this.tweens.add({ targets: background, scale: 1.08, x: WIDTH * 0.47, y: HEIGHT * 0.47, duration: prologueAutoAdvanceMs * prologueCards.length, ease: 'Sine.InOut' });
     this.tweens.add({ targets: lanternGlow, alpha: 0.22, scale: 1.15, yoyo: true, repeat: -1, duration: 1100, ease: 'Sine.InOut' });
@@ -55,14 +57,15 @@ export class IntroScene extends Phaser.Scene {
     const panel = this.add.rectangle(0, 105, 1200, 350, 0x102631, 0.96).setStrokeStyle(3, 0xdeb86a);
     const portrait = this.add.image(-390, 145, isMentor ? 'intro-mentor-bust' : 'intro-player-bust', 0)
       .setDisplaySize(330, 330).setOrigin(0.5, 1).setDepth(2);
-    const nameplate = this.add.rectangle(-390, -8, 190, 46, 0xe6c36d).setOrigin(0.5).setDepth(3);
-    const speakerName = item.actor === 'player' ? getPlayerName() : t('rongJie');
-    const speaker = localizedText(this, -390, -8, speakerName, { fontSize: '22px', color: '#17303b', fontStyle: 'bold' }).setOrigin(0.5).setDepth(3);
+    const nameplate = this.add.rectangle(-390, 181, 190, 46, 0xe6c36d).setOrigin(0.5).setDepth(3);
+    const speakerName = item.actor === 'player' ? getPlayerName() : item.speaker;
+    const speaker = localizedText(this, -390, 181, speakerName, { fontSize: '22px', color: '#17303b', fontStyle: 'bold' }).setOrigin(0.5).setDepth(3);
     const kicker = localizedText(this, -210, -17, prologueCopy('Kicker', this.index), { fontSize: '17px', color: '#e6c36d', letterSpacing: 2 }).setDepth(3);
     const title = localizedText(this, -210, 24, prologueCopy('Title', this.index), { fontSize: '38px', color: '#fff0cf', fontStyle: 'bold' }).setDepth(3);
-    const body = localizedText(this, -210, 93, wrapCjkText(prologueCopy('Body', this.index), 28), { fontSize: '26px', color: '#d8e4dc', wordWrap: { width: 800 }, lineSpacing: 12 }).setDepth(3);
+    const body = localizedText(this, -210, 93, wrapCjkText(prologueCopy('Body', this.index), 28), { fontSize: '24px', color: '#d8e4dc', wordWrap: { width: 760 }, lineSpacing: 12 }).setDepth(3);
+    const progress = this.add.rectangle(-210, 222, 730 * (this.index + 1) / prologueCards.length, 3, 0xe6c36d).setOrigin(0, .5);
     const cue = localizedText(this, 555, 245, `${t('replay')}  ${this.index + 1}/${prologueCards.length}`, { fontSize: '16px', color: '#92bdb2', letterSpacing: 2 }).setOrigin(1).setDepth(3);
-    this.card.add([panel, portrait, nameplate, speaker, kicker, title, body, cue]);
+    this.card.add([panel, portrait, nameplate, speaker, kicker, title, body, cue, progress]);
     this.card.setAlpha(0).setY(HEIGHT / 2 + 34);
     portrait.setX(-500).setAlpha(0);
     this.tweens.add({ targets: this.card, alpha: 1, y: HEIGHT / 2, duration: 360, ease: 'Cubic.Out' });
