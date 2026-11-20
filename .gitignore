@@ -1,0 +1,12 @@
+node_modules/
+dist/
+outputs/
+work/
+.openai/
+.sites/
+.env
+.env.*
+*.log
+preview.html
+玩阴影之下.html
+启动游戏预览.bat

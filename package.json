@@ -1,0 +1,22 @@
+{
+  "name": "under-the-shadow",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.1",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5",
+    "vitest": "^2.1.8"
+  },
+  "dependencies": {
+    "@fontsource/noto-sans-sc": "^5.3.1",
+    "@fontsource/noto-sans-tc": "^5.3.1",
+    "phaser": "^4.2.1"
+  }
+}

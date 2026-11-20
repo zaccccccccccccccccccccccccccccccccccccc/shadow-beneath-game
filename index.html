@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#101a28" />
+    <title>陰影之下 · 第一、二幕</title>
+  </head>
+  <body data-game-ui="gate">
+    <main id="app" aria-label="陰影之下遊戲畫面"></main>
+    <section id="profile-gate" aria-label="設定調查員名稱">
+      <p id="gate-kicker" class="gate-kicker">監察組 · 見習檔案</p>
+      <h1 id="game-title">陰影之下</h1>
+      <p id="gate-help">請留下你的調查員名字。</p>
+      <label id="name-label" for="player-name">調查員名稱</label>
+      <input id="player-name" maxlength="12" value="見習生" autocomplete="nickname" />
+      <label id="language-label" for="game-locale">顯示語言</label>
+      <select id="game-locale">
+        <option value="zh-Hant">繁體中文</option>
+        <option value="zh-Hans">简体中文</option>
+      </select>
+      <label class="music-setting" for="music-enabled">
+        <input id="music-enabled" type="checkbox" checked />
+        <span id="music-label">背景音樂</span>
+      </label>
+      <button id="start-game" type="button">進入檔案</button>
+      <button id="view-character-gallery" type="button">人物表情檔案預覽</button>
+      <button id="start-walk-lab" type="button">測試靈獸步態</button>
+    </section>
+    <section id="asset-loading" role="status" aria-live="polite" data-visible="false">
+      <div class="asset-loading-card">
+        <p id="asset-loading-kicker">調查檔案</p>
+        <h2 id="asset-loading-title">正在載入場景</h2>
+        <progress id="asset-loading-progress" max="1" value="0"></progress>
+        <p id="asset-loading-detail">正在準備地圖與人物美術…</p>
+      </div>
+    </section>
+    <aside id="orientation-tip" role="status" aria-live="polite">
+      <span class="rotate-icon">↻</span>
+      <strong id="rotate-title">請將手機橫向握持</strong>
+      <small id="rotate-body">《陰影之下》以橫向畫面呈現完整場景。</small>
+      <button id="continue-portrait" type="button">仍以直向繼續</button>
+    </aside>
+    <aside id="touch-help">點按石路移動 · 移動手指可調整朝向</aside>
+    <section id="mobile-controls" aria-label="遊戲觸控控制">
+      <div id="mobile-stick" aria-label="移動搖桿"><div id="mobile-knob"></div></div>
+      <div class="mobile-actions">
+        <button id="mobile-help" type="button">求救</button>
+        <button id="mobile-interact" type="button">互動</button>
+        <button id="mobile-notebook" type="button">線索</button>
+        <button id="mobile-map" type="button">地圖</button>
+      </div>
+    </section>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
+
