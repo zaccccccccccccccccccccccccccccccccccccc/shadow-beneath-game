@@ -1,4 +1,6 @@
 import Phaser from 'phaser';
+import { CHECKPOINT_KEY } from './save-session';
+import { fourthActDraft } from './act-four';
 import { createWorldFruitLayout, fruitDescriptions, QUIZ_COOLDOWN_MS, cooldownSeconds, questionDifficulty, type WorldFruit } from './fruit-world';
 import { getSpirit } from './spirits';
 import { thirdActSteps, completeThirdActStep, thirdActComplete } from './act-three';
@@ -83,6 +85,35 @@ interface Objective { key: CopyKey; complete: boolean; target?: string; title?: 
 
 export class WorldScene extends Phaser.Scene {
   private chapter: 1 | 2 | 3 = 1;
+  private checkpointReady = false;
+  private lastCheckpointAt = 0;
+
+  private restoreWorldCheckpoint(): void {
+    try {
+      const saved = JSON.parse(localStorage.getItem(CHECKPOINT_KEY) || 'null');
+      if (!saved || !Object.prototype.hasOwnProperty.call(districtMaps, saved.area)) return;
+      const area = saved.area as RegionId;
+      const point = saved.position;
+      if (point && Number.isFinite(point.x) && Number.isFinite(point.y) && canOccupyWorldPosition(point.x, point.y, districtMaps[area].blockers, DISTRICT_WIDTH, DISTRICT_HEIGHT)) {
+        this.area = area; this.player.setPosition(point.x, point.y); this.moveTarget.set(point.x, point.y);
+      }
+      for (const key of Object.keys(this.tutorial) as Array<keyof typeof this.tutorial>) this.tutorial[key] = saved.tutorial?.[key] === true;
+      const allowedClues = new Set(worldInteractions.flatMap(npc => npc.choices.flatMap(choice => choice.clue ? [choice.clue] : [])));
+      if (Array.isArray(saved.clues)) this.clues = saved.clues.filter((key: CopyKey) => allowedClues.has(key));
+      if (Array.isArray(saved.visited)) this.visited = new Set(saved.visited.filter((id: string) => worldInteractions.some(npc => npc.id === id)));
+      if (Array.isArray(saved.visitedAreas)) this.visitedAreas = new Set(saved.visitedAreas.filter((id: string) => Object.prototype.hasOwnProperty.call(districtMaps, id)));
+      this.visitedAreas.add(this.area);
+      this.helpUses = Math.max(0, Math.min(HELP_LIMIT, Number(saved.helpUses) || 0));
+      this.completionShown = this.companionUnlocked;
+    } catch { /* Malformed saves start from the safe headquarters spawn. */ }
+  }
+
+  private saveWorldCheckpoint(): void {
+    if (!this.checkpointReady || !this.player) return;
+    try {
+      localStorage.setItem(CHECKPOINT_KEY, JSON.stringify({ area: this.area, position: { x: this.player.x, y: this.player.y }, tutorial: this.tutorial, clues: this.clues, visited: [...this.visited], visitedAreas: [...this.visitedAreas], helpUses: this.helpUses }));
+    } catch { /* Keep session playable when storage is unavailable. */ }
+  }
   private selectedSpirit: AvailableSpirit = 'xiezhi';
   private spiritProgress: Record<AvailableSpirit, CompanionProgress> = {
     xiezhi: { claimedSnackIds: [], snacks: 0, fed: 0 },
@@ -356,6 +387,7 @@ export class WorldScene extends Phaser.Scene {
       .setDisplaySize(WIDTH, HEIGHT).setScrollFactor(0).setDepth(65);
     try { this.companionUnlocked = localStorage.getItem('under-shadow-xiezhi-chapter1-claimed-v2') === 'true'; } catch { this.companionUnlocked = false; }
     this.loadCompanionProgress();
+    this.restoreWorldCheckpoint();
     try { this.quizRetryAt = Number(localStorage.getItem('under-shadow-quiz-retry-at-v1')) || 0; } catch { /* No active cooldown. */ }
     for (const id of ['xiezhi','baize','pixiu'] as AvailableSpirit[]) {
       this.spiritProgress[id].claimedSnackIds = this.spiritProgress[id].claimedSnackIds.map(key => {
@@ -374,7 +406,7 @@ export class WorldScene extends Phaser.Scene {
     this.createInput();
     let savedChapterTwo = false;
     try { savedChapterTwo = ['2', '3'].includes(localStorage.getItem('under-shadow-current-chapter') || ''); } catch { /* Use explicit entry. */ }
-    if (new URLSearchParams(window.location.search).has('act-two') || savedChapterTwo) {
+    if (savedChapterTwo) {
       Object.keys(this.tutorial).forEach((key) => { (this.tutorial as Record<string, boolean>)[key] = true; });
       this.clues.push('clueAccounts');
       this.completionShown = true;
@@ -386,7 +418,7 @@ export class WorldScene extends Phaser.Scene {
     this.cameras.main.setBounds(0, 0, DISTRICT_WIDTH, DISTRICT_HEIGHT);
     this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
     this.cameras.main.fadeIn(520, 7, 16, 25);
-    this.showAreaBanner(t('districtHQ'));
+    this.showAreaBanner(t(districtMaps[this.area].label));
     window.addEventListener('under-shadow-touch-axis', this.onTouchAxis as EventListener);
     window.addEventListener('under-shadow-action', this.onTouchAction as EventListener);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
@@ -394,9 +426,16 @@ export class WorldScene extends Phaser.Scene {
       window.removeEventListener('under-shadow-action', this.onTouchAction as EventListener);
     });
     window.dispatchEvent(new CustomEvent('under-shadow-world-ready'));
+    this.checkpointReady = true;
+    this.saveWorldCheckpoint();
+    if (this.chapter === 1 && this.companionUnlocked) this.showChapterAchievement('next');
   }
 
   update(_: number, delta: number): void {
+    if (this.checkpointReady && this.time.now - this.lastCheckpointAt > 1000) {
+      this.lastCheckpointAt = this.time.now;
+      this.saveWorldCheckpoint();
+    }
     if (this.quizTimer?.active) {
       const seconds = cooldownSeconds(this.quizRetryAt, Date.now());
       this.quizTimer.setText(seconds ? '答錯冷卻中 · ' + seconds + ' 秒後可再試' : '每題答錯需冷卻30秒 · 果實會留在原地');
@@ -930,6 +969,7 @@ export class WorldScene extends Phaser.Scene {
       else if (focus >= 0 && focus < this.objectiveScroll) this.objectiveScroll = focus;
     }
     this.objectiveSignature = signature;
+    this.saveWorldCheckpoint();
     this.updatePortalGuide();
     this.updatePortalMarkers();
     const done = list.filter((item) => item.complete).length;
@@ -1470,12 +1510,14 @@ export class WorldScene extends Phaser.Scene {
       if (saved && Array.isArray(saved.completed)) this.secondAct = { ...createActTwoState(), completed: saved.completed.filter((s: string) => ['ledger', 'yongqi', 'tea-house', 'register'].includes(s)), rewardClaimed: saved.rewardClaimed === true };
       localStorage.setItem('under-shadow-current-chapter', '2');
     } catch { /* Continue with in-memory state. */ }
+    if (!isActTwoComplete(this.secondAct)) this.secondAct.rewardClaimed = false;
     if (this.secondAct.rewardClaimed) this.spawnBaize();
     this.chapterTitle?.setText('第二幕 · 帳本的空白頁');
     this.objectiveScroll = 0;
     this.objectiveSignature = '';
     this.updateObjectives(true);
     this.showToast('第二幕開始 · 你仍在原地。沿街區傳送碑步行前往校園，夥伴會繼續同行。');
+    this.saveWorldCheckpoint();
   }
 
   private spawnBaize(): void {
@@ -1530,13 +1572,14 @@ export class WorldScene extends Phaser.Scene {
     try {
       localStorage.setItem('under-shadow-current-chapter', '3');
       const p = JSON.parse(localStorage.getItem('under-shadow-act-three-v1') || 'null');
-      if (p) { this.thirdSteps = thirdActSteps.filter(s => p.completed?.includes(s.id)).map(s => s.id); this.thirdReward = p.rewardClaimed === true; }
+      if (p) { this.thirdSteps = thirdActSteps.filter(s => p.completed?.includes(s.id)).map(s => s.id); this.thirdReward = p.rewardClaimed === true && thirdActComplete(this.thirdSteps); }
     } catch { /* Keep session progress. */ }
     this.chapterTitle?.setText('第三幕 · 禮包裡的名字');
     this.objectiveScroll = 0; this.objectiveSignature = '';
     if (this.thirdReward) this.spawnPixiu();
     this.populateArea(this.area); this.updateObjectives(true);
     this.showToast('柏熹送來廠商禮包，希望換取審批便利。從舊城地產商開始，核實來源、價值、收件人和審批關聯。');
+    this.saveWorldCheckpoint();
   }
 
   private spawnPixiu(): void {
@@ -1552,6 +1595,7 @@ export class WorldScene extends Phaser.Scene {
     if (reward) {
       const pet=this.add.image(800,450,'world-pixiu-young',0).setDisplaySize(240,320).setAlpha(0); layer.add(pet);
       this.tweens.add({targets:pet,alpha:1,y:430,duration:1100});
+      layer.add(localizedText(this, 800, 625, fourthActDraft.title + '（準備中）\n下一份檔案將核對報價、合同、工程量與付款流向。', { fontSize: '19px', color: '#c5d8ce', align: 'center' }).setOrigin(.5));
     } else layer.add(localizedText(this,800,410,wrapCjkText('你保存了禮包來源、發票、收件記錄與審批往來。收禮與請託的關聯仍須由完整證據核實。學習重點：辨識職務便利、財物與不正當利益，不能把一般人情或單一時點直接當作犯罪結論。拒收後仍應依公平程序處理申請。',36),{fontSize:'23px',color:'#dcebe1',lineSpacing:12}).setOrigin(.5));
     this.addButton(layer,800,720,390,reward ? '回到街區 · 投餵守界梨' : '讀畢規則 · 領取貔貅',()=>this.handleChapterPointer(800,720),true);
   }

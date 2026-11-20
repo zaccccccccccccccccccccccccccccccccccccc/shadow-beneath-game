@@ -9,20 +9,21 @@ import { ActTwoScene } from './game/ActTwoScene';
 import { SpiritWalkLabScene } from './game/SpiritWalkLabScene';
 import { CharacterGalleryScene } from './game/CharacterGalleryScene';
 import { setPlayerName } from './game/profile';
+import { hasGameSave, startFreshGame } from './game/save-session';
 import { getJoystickVector, requiresLandscapePrompt } from './game/mobile';
 import { getLocale, setLocale, t } from './game/localization';
 import { installMusicAutoplay, isMusicEnabled, setMusicEnabled } from './game/music';
 import './styles.css';
 import './music-ui.css';
 
-function startGame(mode: 'game' | 'act-two' | 'walk-lab' | 'gallery' = 'game'): void {
+function startGame(mode: 'game' | 'resume' | 'walk-lab' | 'gallery' = 'game'): void {
   new Phaser.Game({
     type: Phaser.AUTO,
     parent: 'app',
     width: 1600,
     height: 900,
     backgroundColor: '#101a28',
-    scene: mode === 'walk-lab' ? [SpiritWalkLabScene] : mode === 'gallery' ? [CharacterGalleryScene] : mode === 'act-two' ? [WorldScene, ActTwoScene] : [IntroScene, WorldScene, ActTwoScene, CharacterGalleryScene],
+    scene: mode === 'walk-lab' ? [SpiritWalkLabScene] : mode === 'gallery' ? [CharacterGalleryScene] : mode === 'resume' ? [WorldScene, CharacterGalleryScene] : [IntroScene, WorldScene, CharacterGalleryScene],
     scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH },
     render: { antialias: true, pixelArt: false },
   });
@@ -31,6 +32,7 @@ function startGame(mode: 'game' | 'act-two' | 'walk-lab' | 'gallery' = 'game'): 
 const gate = document.querySelector<HTMLElement>('#profile-gate');
 const nameInput = document.querySelector<HTMLInputElement>('#player-name');
 const startButton = document.querySelector<HTMLButtonElement>('#start-game');
+const continueButton = document.querySelector<HTMLButtonElement>('#continue-game');
 const walkLabButton = document.querySelector<HTMLButtonElement>('#start-walk-lab');
 const characterGalleryButton = document.querySelector<HTMLButtonElement>('#view-character-gallery');
 const localeSelect = document.querySelector<HTMLSelectElement>('#game-locale');
@@ -58,6 +60,11 @@ function applyLocale(): void {
   if (options?.[0]) options[0].text = t('traditional');
   if (options?.[1]) options[1].text = t('simplified');
   if (characterGalleryButton) characterGalleryButton.textContent = locale === 'zh-Hans' ? '人物表情档案预览' : '人物表情檔案預覽';
+  if (startButton) startButton.textContent = locale === 'zh-Hans' ? '新游戏 · 从教学开始' : '新遊戲 · 從教學開始';
+  if (continueButton) {
+    continueButton.textContent = locale === 'zh-Hans' ? '继续调查 · 读取存档' : '繼續調查 · 讀取存檔';
+    try { continueButton.hidden = !hasGameSave(localStorage); } catch { continueButton.hidden = true; }
+  }
   const musicLabel = document.getElementById('music-label');
   if (musicLabel) musicLabel.textContent = locale === 'zh-Hans' ? '背景音乐' : '背景音樂';
   const touchHelp = document.getElementById('touch-help');
@@ -107,7 +114,7 @@ window.addEventListener('under-shadow-load-error', (event) => {
 window.addEventListener('under-shadow-world-ready', () => {
   if (loadingOverlay) loadingOverlay.dataset.visible = 'false';
 }, { once: true });
-const begin = () => {
+const begin = (resume = false) => {
   if (gameStarted) return;
   gameStarted = true;
   document.body.dataset.gameUi = 'loading';
@@ -116,7 +123,9 @@ const begin = () => {
   const help = gate?.querySelector('#gate-help');
   if (help) help.textContent = getLocale() === 'zh-Hans' ? '正在载入开场场景，请稍候…' : '正在載入開場場景，請稍候…';
   try {
-    startGame();
+    if (!resume) startFreshGame(localStorage);
+    startGame(resume ? 'resume' : 'game');
+    if (resume) { introReady = true; gate?.remove(); }
     setupMobileControls();
     window.setTimeout(() => {
       if (!introReady && !initialLoadFailed && gate?.isConnected && help) {
@@ -153,21 +162,14 @@ const beginCharacterGallery = () => {
   startGame('gallery');
 };
 document.body.dataset.gameUi = 'gate';
-startButton?.addEventListener('click', begin);
+startButton?.addEventListener('click', () => begin(false));
+continueButton?.addEventListener('click', () => begin(true));
 walkLabButton?.addEventListener('click', beginWalkLab);
 characterGalleryButton?.addEventListener('click', beginCharacterGallery);
 nameInput?.addEventListener('keydown', (event) => { if (event.key === 'Enter') begin(); });
 
 if (new URLSearchParams(window.location.search).has('walk-lab')) beginWalkLab();
 if (new URLSearchParams(window.location.search).has('characters')) beginCharacterGallery();
-if (new URLSearchParams(window.location.search).has('act-two')) {
-  gameStarted = true;
-  document.body.dataset.gameUi = 'loading';
-  setPlayerName(nameInput?.value ?? '见习生');
-  gate?.remove();
-  startGame('act-two');
-  setupMobileControls();
-}
 
 let portraitAllowed = false;
 const syncMobileLayout = () => {
