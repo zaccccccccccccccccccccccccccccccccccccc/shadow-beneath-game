@@ -2,6 +2,21 @@ import { describe, expect, it } from 'vitest';
 import { claimSnack, feedCompanion, getCompanionGrowthStage, getCompanionPose, getCompanionTrailPoint, type CompanionProgress } from '../src/game/companion';
 
 describe('chapter reward companion', () => {
+  it('keeps collected food across a reload and feeds all six rewards through both evolutions', () => {
+    let progress: CompanionProgress = { claimedSnackIds: [], snacks: 0, fed: 0 };
+    for (let i = 0; i < 6; i++) progress = claimSnack(progress, `ground-${i}`, true);
+    progress = JSON.parse(JSON.stringify(progress));
+    expect(progress.snacks).toBe(6);
+    for (let i = 1; i <= 6; i++) {
+      const next = feedCompanion(progress);
+      expect(next).not.toBeNull();
+      progress = next!;
+      expect(progress.snacks + progress.fed).toBe(6);
+      if (i === 3) expect(getCompanionGrowthStage(progress.fed).id).toBe('growing');
+    }
+    expect(getCompanionGrowthStage(progress.fed).id).toBe('guardian');
+    expect(claimSnack(progress, 'ground-0', true)).toEqual(progress);
+  });
   it('follows the path around a corner instead of cutting across a building', () => {
     const trail = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }];
     expect(getCompanionTrailPoint({ x: 100, y: 100 }, trail, 140)).toEqual({ x: 60, y: 0 });
