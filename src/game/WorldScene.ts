@@ -1546,7 +1546,8 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private openCompanionPanel(): void {
-    if (!this.companionUnlocked || this.companionLayer || this.dialogueLayer || this.chapterLayer) return;
+    const owned = this.selectedSpirit === 'xiezhi' ? this.companionUnlocked : this.selectedSpirit === 'baize' ? this.secondAct.rewardClaimed : this.thirdReward;
+    if (!owned || this.companionLayer || this.dialogueLayer || this.chapterLayer) return;
     this.activeSnackId = null;
     this.companionPanelMode = 'intro';
     this.renderCompanionPanel();

@@ -48,7 +48,7 @@ const localeFields: Array<[string, Parameters<typeof t>[0]]> = [
 function applyLocale(): void {
   const locale = getLocale();
   document.documentElement.lang = locale;
-  document.title = locale === 'zh-Hans' ? '阴影之下 · 第一、二幕' : '陰影之下 · 第一、二幕';
+  document.title = locale === 'zh-Hans' ? '阴影之下 · 第一至三幕' : '陰影之下 · 第一至三幕';
   if (localeSelect) localeSelect.value = locale;
   localeFields.forEach(([id, key]) => {
     const element = document.getElementById(id);
