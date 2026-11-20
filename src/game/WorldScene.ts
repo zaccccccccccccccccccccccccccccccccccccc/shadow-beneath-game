@@ -1,4 +1,15 @@
 import Phaser from 'phaser';
+import { getSpirit } from './spirits';
+import { thirdActSteps, completeThirdActStep, thirdActComplete } from './act-three';
+import { getChapterFruitSpots, spiritQuestions, spiritNames, fruitNames, type AvailableSpirit } from './chapter-fruits';
+import clarityFruit from '../assets/fruit-clarity.png';
+import testimonyFruit from '../assets/fruit-testimony.png';
+import boundaryFruit from '../assets/fruit-boundary.png';
+import baizeGrowing from '../assets/spirit-baize-growing-walk.png';
+import baizeGuardian from '../assets/spirit-baize-guardian-walk.png';
+import pixiuWalk from '../assets/spirit-pixiu-young-walk.png';
+import pixiuGrowing from '../assets/spirit-pixiu-growing-walk.png';
+import pixiuGuardian from '../assets/spirit-pixiu-guardian-walk.png';
 import { getLocale, localizedText, t, type CopyKey } from './localization';
 import { canFastTravelTo, isChapterComplete } from './progression';
 import { getPlayerName } from './profile';
@@ -67,10 +78,26 @@ const backgroundAssets: Record<RegionId, string> = {
 };
 
 type Facing = 'front' | 'back' | 'left' | 'right';
-interface Objective { key: CopyKey; complete: boolean; target?: string }
+interface Objective { key: CopyKey; complete: boolean; target?: string; title?: string }
 
 export class WorldScene extends Phaser.Scene {
-  private chapter: 1 | 2 = 1;
+  private chapter: 1 | 2 | 3 = 1;
+  private selectedSpirit: AvailableSpirit = 'xiezhi';
+  private spiritProgress: Record<AvailableSpirit, CompanionProgress> = {
+    xiezhi: { claimedSnackIds: [], snacks: 0, fed: 0 },
+    baize: { claimedSnackIds: [], snacks: 0, fed: 0 },
+    pixiu: { claimedSnackIds: [], snacks: 0, fed: 0 },
+  };
+  private thirdSteps: string[] = [];
+  private thirdReward = false;
+  private pixiuFollower?: Phaser.GameObjects.Sprite;
+  private get companionProgress(): CompanionProgress { return this.spiritProgress[this.selectedSpirit]; }
+  private set companionProgress(value: CompanionProgress) { this.spiritProgress[this.selectedSpirit] = value; }
+
+  private availableFruitSpots() {
+    const all = getChapterFruitSpots(this.chapter).filter(spot => !this.spiritProgress[spot.spiritId].claimedSnackIds.includes(spot.id));
+    return all.filter(spot => !all.some(other => other.region === spot.region && other.x === spot.x && other.y === spot.y && other.act > spot.act));
+  }
   private secondAct = createActTwoState();
   private chapterTitle?: Phaser.GameObjects.Text;
   private secondActConcluded = false;
@@ -103,7 +130,6 @@ export class WorldScene extends Phaser.Scene {
   private companionPhase = 0;
   private companionLayer: Phaser.GameObjects.Container | null = null;
   private companionPanelMode: 'intro' | 'quiz' | 'result' | 'feed' = 'intro';
-  private companionProgress: CompanionProgress = { claimedSnackIds: [], snacks: 0, fed: 0 };
   private companionLastAnswerCorrect = false;
   private activeSnackId: string | null = null;
   private snackMarkers = new Map<string, Phaser.GameObjects.Container>();
@@ -183,10 +209,21 @@ export class WorldScene extends Phaser.Scene {
         this.companionProgress = { claimedSnackIds: stored.claimedSnackIds, snacks: Math.max(0, Number(stored.snacks) || 0), fed: Math.max(0, Number(stored.fed) || 0) };
       }
     } catch { /* A new in-memory progress record remains available. */ }
+    try {
+      const stored = JSON.parse(localStorage.getItem('under-shadow-species-fruits-v1') || 'null');
+      if (stored) for (const id of ['xiezhi','baize','pixiu'] as AvailableSpirit[]) {
+        const p = stored[id];
+        if (p && Array.isArray(p.claimedSnackIds)) this.spiritProgress[id] = { claimedSnackIds: p.claimedSnackIds.filter((v: unknown) => typeof v === 'string'), snacks: Math.max(0, Number(p.snacks) || 0), fed: Math.max(0, Number(p.fed) || 0) };
+      }
+      else {
+        // All rewards in the former shared system belonged to the first companion.
+        this.spiritProgress.xiezhi.claimedSnackIds = this.spiritProgress.xiezhi.claimedSnackIds.map(id => id.includes(':') ? id : 'xiezhi:' + id);
+      }
+    } catch { /* Keep migrated legacy progress. */ }
   }
 
   private saveCompanionProgress(): void {
-    try { localStorage.setItem('under-shadow-xiezhi-v3', JSON.stringify(this.companionProgress)); } catch { /* Keep the current session playable. */ }
+    try { localStorage.setItem('under-shadow-species-fruits-v1', JSON.stringify(this.spiritProgress)); localStorage.setItem('under-shadow-xiezhi-v3', JSON.stringify(this.spiritProgress.xiezhi)); } catch { /* Keep the current session playable. */ }
   }
 
   private updateCompanion(delta: number): void {
@@ -195,7 +232,14 @@ export class WorldScene extends Phaser.Scene {
       const dy = this.player.y + 32 - this.baizeFollower.y;
       const moving = this.walking && Math.hypot(dx, dy) > 4;
       this.baizeFollower.setPosition(this.baizeFollower.x + dx * Math.min(1, delta / 220), this.baizeFollower.y + dy * Math.min(1, delta / 220));
-      this.baizeFollower.setFrame(moving ? Math.floor(this.time.now / 220) % 4 : 0).setFlipX(this.facing === 'left').setDepth(getFeetDepth(this.baizeFollower.y));
+      this.baizeFollower.setTexture('world-baize-' + getCompanionGrowthStage(this.spiritProgress.baize.fed).id, moving ? Math.floor(this.time.now / 220) % 4 : 0).setDisplaySize(getCompanionGrowthStage(this.spiritProgress.baize.fed).size, getCompanionGrowthStage(this.spiritProgress.baize.fed).size * 724 / 543).setFlipX(this.facing === 'left').setDepth(getFeetDepth(this.baizeFollower.y));
+    }
+    if (this.pixiuFollower) {
+      const p = this.pixiuFollower;
+      p.x += (this.player.x + 90 - p.x) * Math.min(1, delta / 240);
+      p.y += (this.player.y + 35 - p.y) * Math.min(1, delta / 240);
+      const stage = getCompanionGrowthStage(this.spiritProgress.pixiu.fed);
+      p.setTexture('world-pixiu-' + stage.id, this.walking ? Math.floor(this.time.now / 220) % 4 : 0).setFlipX(this.facing === 'left').setDisplaySize(stage.size, stage.size * 724 / 543).setDepth(getFeetDepth(p.y));
     }
     const companion = this.companion;
     if (!companion) return;
@@ -216,15 +260,16 @@ export class WorldScene extends Phaser.Scene {
     if (moving) this.companionPhase += delta * 0.009;
     const col = ({ front: 0, left: 1, right: 2, back: 3 } as const)[this.facing];
     const row = moving ? (Math.floor(this.companionPhase / 0.55) % 2) + 1 : (Math.floor(this.time.now / 900) % 5 === 0 ? 3 : 0);
-    const stage = getCompanionGrowthStage(this.companionProgress.fed);
+    const stage = getCompanionGrowthStage(this.spiritProgress.xiezhi.fed);
     companion.setTexture('xiezhi-sprites', row * 4 + col).setFlipX(false).setDisplaySize(stage.size, stage.size);
-    applyCompanionForm(companion, this.companionProgress.fed, this.facing, moving, this.companionPhase);
+    applyCompanionForm(companion, this.spiritProgress.xiezhi.fed, this.facing, moving, this.companionPhase);
     companion.setDepth(getFeetDepth(companion.y));
     companion.setAlpha(getWallOcclusionAlpha(companion.x, companion.y, districtMaps[this.area].blockers, DISTRICT_WIDTH, DISTRICT_HEIGHT));
   }
 
   private resetCompanionAfterTravel(): void {
     this.baizeFollower?.setPosition(this.player.x - 100, this.player.y + 32);
+    this.pixiuFollower?.setPosition(this.player.x + 90, this.player.y + 35);
     this.companionTrail = [{ x: this.player.x - 55, y: this.player.y + 12 }];
     this.companion?.setPosition(this.player.x - 55, this.player.y + 12);
   }
@@ -238,7 +283,10 @@ export class WorldScene extends Phaser.Scene {
   }
 
   preload(): void {
-    this.load.spritesheet('world-baize-follow', baizeWalk, { frameWidth: 543, frameHeight: 724 });
+    for (const [key, asset] of Object.entries({ 'world-baize-young': baizeWalk, 'world-baize-growing': baizeGrowing, 'world-baize-guardian': baizeGuardian, 'world-pixiu-young': pixiuWalk, 'world-pixiu-growing': pixiuGrowing, 'world-pixiu-guardian': pixiuGuardian })) this.load.spritesheet(key, asset, { frameWidth: 543, frameHeight: 724 });
+    this.load.image('fruit-xiezhi', clarityFruit);
+    this.load.image('fruit-baize', testimonyFruit);
+    this.load.image('fruit-pixiu', boundaryFruit);
     this.load.image('world-baize-reward', baizeRewardArt);
     loadCompanionForms(this);
     this.load.maxParallelDownloads = 4;
@@ -286,9 +334,9 @@ export class WorldScene extends Phaser.Scene {
     this.lanternTexture = lanternTexture;
     this.add.image(WIDTH / 2, HEIGHT / 2, 'world-lantern-mask')
       .setDisplaySize(WIDTH, HEIGHT).setScrollFactor(0).setDepth(65);
-    this.populateArea(this.area);
     try { this.companionUnlocked = localStorage.getItem('under-shadow-xiezhi-chapter1-claimed-v2') === 'true'; } catch { this.companionUnlocked = false; }
     this.loadCompanionProgress();
+    this.populateArea(this.area);
     if (this.companionUnlocked) {
       this.spawnCompanion();
       this.addSnackPickups(this.area);
@@ -297,12 +345,15 @@ export class WorldScene extends Phaser.Scene {
     this.createDialogueControls();
     this.createInput();
     let savedChapterTwo = false;
-    try { savedChapterTwo = localStorage.getItem('under-shadow-current-chapter') === '2'; } catch { /* Use explicit entry. */ }
+    try { savedChapterTwo = ['2', '3'].includes(localStorage.getItem('under-shadow-current-chapter') || ''); } catch { /* Use explicit entry. */ }
     if (new URLSearchParams(window.location.search).has('act-two') || savedChapterTwo) {
       Object.keys(this.tutorial).forEach((key) => { (this.tutorial as Record<string, boolean>)[key] = true; });
       this.clues.push('clueAccounts');
       this.completionShown = true;
+      let resumeThird = false;
+      try { resumeThird = localStorage.getItem('under-shadow-current-chapter') === '3'; } catch { /* Use current chapter. */ }
       this.enterActTwo();
+      if (resumeThird) this.enterThirdAct();
     }
     this.cameras.main.setBounds(0, 0, DISTRICT_WIDTH, DISTRICT_HEIGHT);
     this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
@@ -398,19 +449,19 @@ export class WorldScene extends Phaser.Scene {
     if (area === 'hq') this.addGroundWalkHint();
 
     worldInteractions.filter((item) => item.region === area).forEach((item) => this.addInteraction(item));
-    if (this.companionUnlocked) this.addSnackPickups(area);
+    this.addSnackPickups(area);
     map.portals.forEach((portal) => this.addPortal(portal));
     this.cameras.main.setBounds(0, 0, DISTRICT_WIDTH, DISTRICT_HEIGHT);
   }
 
   private addSnackPickups(area: RegionId): void {
-    companionSnackSpots
-      .filter((spot) => spot.region === area && !this.companionProgress.claimedSnackIds.includes(spot.id))
+    this.availableFruitSpots()
+      .filter((spot) => spot.region === area && !this.snackMarkers.has(spot.id))
       .forEach((spot) => {
         const marker = this.add.container(spot.x, spot.y).setDepth(getFeetDepth(spot.y) + 1);
         const glow = this.add.circle(0, -28, 45, 0xffca61, 0.20);
-        const food = this.add.image(0, -28, 'spirit-biscuit').setDisplaySize(68, 68);
-        const label = localizedText(this, 0, 19, getLocale() === 'zh-Hans' ? `${spot.spirit} · ${spot.lesson}` : `${spot.spirit} · ${spot.lesson}`, { fontSize: '14px', color: '#fff0bd', backgroundColor: '#102631dd', padding: { x: 8, y: 4 } }).setOrigin(.5);
+        const food = this.add.image(0, -28, 'fruit-' + spot.spiritId).setDisplaySize(68, 68);
+        const label = localizedText(this, 0, 19, getLocale() === 'zh-Hans' ? `${spiritNames[spot.spiritId]} · ${fruitNames[spot.spiritId]}` : `${spiritNames[spot.spiritId]} · ${fruitNames[spot.spiritId]}`, { fontSize: '14px', color: '#fff0bd', backgroundColor: '#102631dd', padding: { x: 8, y: 4 } }).setOrigin(.5);
         marker.add([glow, food, label]);
         this.tweens.add({ targets: [glow, food], y: '+=7', duration: 850, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
         this.areaActors.push(marker);
@@ -593,10 +644,12 @@ export class WorldScene extends Phaser.Scene {
     if (x >= WIDTH - 280 && y <= 225) { this.toggleMap(); return; }
 
     const point = this.cameras.main.getWorldPoint(x, y);
+    const pets: Array<[AvailableSpirit, Phaser.GameObjects.Sprite | null | undefined]> = [['baize', this.baizeFollower], ['pixiu', this.pixiuFollower]];
+    for (const [id, pet] of pets) if (pet && Math.abs(point.x - pet.x) < 50 && point.y >= pet.y - 120 && point.y < pet.y + 18) { this.selectedSpirit = id; this.openCompanionPanel(); return; }
     if (this.companionUnlocked && this.companion && Math.abs(point.x - this.companion.x) < 70 && point.y >= this.companion.y - 112 && point.y <= this.companion.y + 24) {
-      this.openCompanionPanel(); return;
+      this.selectedSpirit = 'xiezhi'; this.openCompanionPanel(); return;
     }
-    const snackSpot = companionSnackSpots.find((spot) => spot.region === this.area && !this.companionProgress.claimedSnackIds.includes(spot.id) && Phaser.Math.Distance.Between(point.x, point.y, spot.x, spot.y - 18) < 66);
+    const snackSpot = this.availableFruitSpots().find((spot) => spot.region === this.area && Phaser.Math.Distance.Between(point.x, point.y, spot.x, spot.y - 18) < 66);
     if (snackSpot) {
       if (Phaser.Math.Distance.Between(this.player.x, this.player.y, snackSpot.x, snackSpot.y) <= INTERACT_RADIUS) this.openSnackQuiz(snackSpot.id);
       else { this.navigateNear(snackSpot.x, snackSpot.y, 72); this.showToast(getLocale() === 'zh-Hans' ? '走近发光零食，回答问题后领取。' : '走近發光零食，回答問題後領取。'); }
@@ -652,7 +705,7 @@ export class WorldScene extends Phaser.Scene {
     if (this.companionLayer) { if (Phaser.Input.Keyboard.JustDown(this.escKey)) this.closeCompanionPanel(); return; }
     if (this.chapterLayer) {
       if (Phaser.Input.Keyboard.JustDown(this.interactKey) || Phaser.Input.Keyboard.JustDown(this.eKey) || Phaser.Input.Keyboard.JustDown(this.escKey)) {
-        if (this.chapter === 2) this.handleChapterPointer(800, 720);
+        if (this.chapter >= 2) this.handleChapterPointer(800, 720);
         else if (this.chapterPage === 'law') this.claimCompanionAndShowNext(); else this.enterActTwo();
       }
       return;
@@ -799,6 +852,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private objectives(): Objective[] {
+    if (this.chapter === 3) return thirdActSteps.map(step => ({ key: 'objectiveFile', title: step.title, target: step.id, complete: this.thirdSteps.includes(step.id) }));
     if (this.chapter === 2) return [
       { key: 'objectiveCampus', complete: this.secondAct.completed.includes('ledger'), target: 'treasurer' },
       { key: 'objectiveFile', complete: this.secondAct.completed.includes('yongqi'), target: 'student' },
@@ -866,7 +920,7 @@ export class WorldScene extends Phaser.Scene {
       const item = this.touchLayout ? list.find((candidate) => !candidate.complete) ?? list[list.length - 1] : list[this.objectiveScroll + index];
       row.setVisible(Boolean(item));
       const secondLabels: Partial<Record<CopyKey, string>> = { objectiveCampus: '前往校園 · 核對社團帳簿', objectiveFile: '校園 · 向學生核對物資簽收', objectiveInformant: '沿原路回舊城 · 核對會面時間', objectiveCafe: '前往海邊茶館 · 核對港口登記' };
-      if (item) row.setText(`${item.complete ? '✓' : '○'}  ${this.chapter === 2 ? secondLabels[item.key] ?? t(item.key) : t(item.key)}`).setColor(item.complete ? '#8fc5a9' : '#d9e3da');
+      if (item) row.setText(`${item.complete ? '✓' : '○'}  ${item.title ?? (this.chapter === 2 ? secondLabels[item.key] ?? t(item.key) : t(item.key))}`).setColor(item.complete ? '#8fc5a9' : '#d9e3da');
     });
     this.objectiveScrollText?.setText(`${this.objectiveScroll + 1}–${Math.min(list.length, this.objectiveScroll + pageSize)} / ${list.length}  ·  ${t('scrollTasks')}`);
   }
@@ -892,7 +946,7 @@ export class WorldScene extends Phaser.Scene {
     this.dialogueLayer = this.add.container(0, 0).setScrollFactor(0).setDepth(100);
     this.dialogueLayer.add(this.add.rectangle(WIDTH / 2, HEIGHT / 2, WIDTH, HEIGHT, 0x071019, 0.48).setInteractive());
     const step = this.chapter === 2 ? this.secondActStepFor(item.id) : undefined;
-    this.drawDialogue(item, step ? this.secondActStory(step) : t(item.intro), item.choices);
+    this.drawDialogue(item, this.chapter === 3 ? thirdActSteps.find(s => s.id === item.id)?.story ?? t(item.intro) : step ? this.secondActStory(step) : t(item.intro), item.choices);
   }
 
   private drawDialogue(item: WorldInteraction, body: string, choices: InteractionChoice[] | null): void {
@@ -956,6 +1010,17 @@ export class WorldScene extends Phaser.Scene {
 
   private chooseDialogue(item: WorldInteraction, choice: InteractionChoice): void {
     if (choice.label === 'endTalk') { this.advanceDialogue(); return; }
+    if (this.chapter === 3) {
+      const step = thirdActSteps.find(s => s.id === item.id);
+      const next = completeThirdActStep(this.thirdSteps, item.id);
+      const advanced = next.length > this.thirdSteps.length;
+      this.thirdSteps = next;
+      this.saveThirdAct();
+      this.responseMode = true;
+      this.updateObjectives(true);
+      this.drawDialogue(item, advanced ? step!.story + '\n【線索已保存】' + step!.evidence : step && !this.thirdSteps.includes(item.id) ? '先依清單核對前一份記錄，再比對這份材料。' : t(choice.reply), null);
+      return;
+    }
     if (this.chapter === 2) {
       const step = this.secondActStepFor(item.id);
       const next = getActTwoNextStep(this.secondAct);
@@ -996,6 +1061,7 @@ export class WorldScene extends Phaser.Scene {
     this.dialogueLayer = null;
     this.activeInteraction = null;
     this.responseMode = false;
+    if (this.chapter === 3 && thirdActComplete(this.thirdSteps) && !this.thirdReward) this.showThirdActConclusion(false);
     if (this.chapter === 2 && isActTwoComplete(this.secondAct) && !this.secondActConcluded) {
       this.secondActConcluded = true;
       this.showSecondActConclusion();
@@ -1098,7 +1164,8 @@ export class WorldScene extends Phaser.Scene {
     layer.add(this.add.rectangle(WIDTH / 2, HEIGHT / 2, 820, 650, 0xeadfbe, 0.99).setStrokeStyle(4, 0x38525b));
     layer.add(this.add.rectangle(WIDTH / 2, 180, 820, 70, 0x244551));
     layer.add(localizedText(this, WIDTH / 2, 180, t('clueBook'), { fontSize: '27px', color: '#fff0cf', fontStyle: 'bold' }).setOrigin(0.5));
-    const body = this.clues.length ? this.clues.map((clue, index) => `${String(index + 1).padStart(2, '0')}  ${t(clue)}`).join('\n\n') : t('noClues');
+    const records = this.chapter === 3 ? thirdActSteps.filter(step => this.thirdSteps.includes(step.id)).map(step => step.evidence) : this.chapter === 2 ? this.secondAct.completed.map(step => this.secondActStory(step)) : this.clues.map(clue => t(clue));
+    const body = records.length ? records.map((line, index) => (index + 1) + '  ' + line).join('\n\n') : t('noClues');
     layer.add(localizedText(this, 440, 240, wrapCjkText(body, this.touchLayout ? 24 : 36), { fontSize: this.touchLayout ? '27px' : '21px', color: '#233b43', wordWrap: { width: 720 }, lineSpacing: 12 }));
     this.addButton(layer, WIDTH / 2, 720, 270, t('notebookClose'), () => this.closeNotebook(), true);
   }
@@ -1327,9 +1394,15 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private handleChapterPointer(x: number, y: number): void {
+    if (this.chapter === 3) {
+      if (!hitsButton(x, y, 800, 720, 390, this.touchLayout ? 88 : 54)) return;
+      if (!this.thirdReward) { this.thirdReward = true; this.saveThirdAct(); this.spawnPixiu(); this.showThirdActConclusion(true); }
+      else this.closeChapterAchievement();
+      return;
+    }
     if (this.chapter === 2) {
       if (!hitsButton(x, y, 800, 720, 390, this.touchLayout ? 88 : 54)) return;
-      if (this.secondActRewardPage) this.closeChapterAchievement();
+      if (this.secondActRewardPage) this.enterThirdAct();
       else {
         this.secondAct.rewardClaimed = true;
         try { localStorage.setItem('under-shadow-act-two-v1', JSON.stringify(this.secondAct)); } catch { /* Session reward remains. */ }
@@ -1358,6 +1431,8 @@ export class WorldScene extends Phaser.Scene {
   private enterActTwo(): void {
     this.chapterLayer?.destroy(true); this.chapterLayer = null;
     this.chapter = 2;
+    this.selectedSpirit = 'xiezhi';
+    this.populateArea(this.area);
     try {
       const saved = JSON.parse(localStorage.getItem('under-shadow-act-two-v1') || 'null');
       if (saved && Array.isArray(saved.completed)) this.secondAct = { ...createActTwoState(), completed: saved.completed.filter((s: string) => ['ledger', 'yongqi', 'tea-house', 'register'].includes(s)), rewardClaimed: saved.rewardClaimed === true };
@@ -1373,7 +1448,7 @@ export class WorldScene extends Phaser.Scene {
 
   private spawnBaize(): void {
     if (this.baizeFollower) return;
-    this.baizeFollower = this.add.sprite(this.player.x - 100, this.player.y + 32, 'world-baize-follow', 0).setOrigin(.5, 1).setDisplaySize(92, 92 * 724 / 543).setAlpha(0);
+    this.baizeFollower = this.add.sprite(this.player.x - 100, this.player.y + 32, 'world-baize-young', 0).setOrigin(.5, 1).setDisplaySize(92, 92 * 724 / 543).setAlpha(0);
     this.tweens.add({ targets: this.baizeFollower, alpha: 1, duration: 1000 });
   }
 
@@ -1404,60 +1479,84 @@ export class WorldScene extends Phaser.Scene {
       this.tweens.add({ targets: art, alpha: 1, y: 410, duration: 1200 });
       layer.add(localizedText(this, 800, 615, '白澤提醒你：準確的證據，比匆忙的結論更有價值。', { fontSize: '23px', color: '#dcebe1' }).setOrigin(.5));
     } else layer.add(localizedText(this, 800, 430, wrapCjkText('帳簿、物資簽收、會面與登記已逐項核對。請保全原始材料，交由主管繼續核實。涉及公共財產與職務侵佔時，須結合身份、金額、主觀目的及完整證據判斷；帳目異常本身不等於犯罪。', 36), { fontSize: '24px', color: '#dcebe1', lineSpacing: 12 }).setOrigin(.5));
-    this.addButton(layer, 800, 720, 390, reward ? '返回原街區繼續探索' : '讀畢規則 · 領取白澤', () => {
+    this.addButton(layer, 800, 720, 390, reward ? '帶白澤同行 · 開始第三幕' : '讀畢規則 · 領取白澤', () => {
       if (!reward) {
         this.secondAct.rewardClaimed = true;
         try { localStorage.setItem('under-shadow-act-two-v1', JSON.stringify(this.secondAct)); } catch { /* Session reward remains. */ }
         this.showSecondActConclusion(true);
-      } else this.closeChapterAchievement();
+      } else this.enterThirdAct();
     }, true);
   }
 
+  private saveThirdAct(): void {
+    try { localStorage.setItem('under-shadow-act-three-v1', JSON.stringify({ completed: this.thirdSteps, rewardClaimed: this.thirdReward })); } catch { /* Keep session progress. */ }
+  }
+
+  private enterThirdAct(): void {
+    this.closeChapterAchievement();
+    this.chapter = 3;
+    try {
+      localStorage.setItem('under-shadow-current-chapter', '3');
+      const p = JSON.parse(localStorage.getItem('under-shadow-act-three-v1') || 'null');
+      if (p) { this.thirdSteps = thirdActSteps.filter(s => p.completed?.includes(s.id)).map(s => s.id); this.thirdReward = p.rewardClaimed === true; }
+    } catch { /* Keep session progress. */ }
+    this.chapterTitle?.setText('第三幕 · 禮包裡的名字');
+    this.objectiveScroll = 0; this.objectiveSignature = '';
+    if (this.thirdReward) this.spawnPixiu();
+    this.populateArea(this.area); this.updateObjectives(true);
+    this.showToast('柏熹送來廠商禮包，希望換取審批便利。從舊城地產商開始，核實來源、價值、收件人和審批關聯。');
+  }
+
+  private spawnPixiu(): void {
+    if (this.pixiuFollower) return;
+    this.pixiuFollower = this.add.sprite(this.player.x + 90, this.player.y + 35, 'world-pixiu-young', 0).setOrigin(.5, 1).setDisplaySize(92, 123);
+  }
+
+  private showThirdActConclusion(reward: boolean): void {
+    this.chapterLayer?.destroy(true);
+    const layer = this.add.container(0,0).setScrollFactor(0).setDepth(110); this.chapterLayer=layer;
+    layer.add(this.add.rectangle(800,450,1600,900,0x071019,.95));
+    layer.add(localizedText(this,800,190,reward ? '貔貅 · 守住邊界之靈' : '第三幕完成 · 禮包裡的名字',{fontSize:'32px',color:'#ffe0a0'}).setOrigin(.5));
+    if (reward) {
+      const pet=this.add.image(800,450,'world-pixiu-young',0).setDisplaySize(240,320).setAlpha(0); layer.add(pet);
+      this.tweens.add({targets:pet,alpha:1,y:430,duration:1100});
+    } else layer.add(localizedText(this,800,410,wrapCjkText('你保存了禮包來源、發票、收件記錄與審批往來。收禮與請託的關聯仍須由完整證據核實。學習重點：辨識職務便利、財物與不正當利益，不能把一般人情或單一時點直接當作犯罪結論。拒收後仍應依公平程序處理申請。',36),{fontSize:'23px',color:'#dcebe1',lineSpacing:12}).setOrigin(.5));
+    this.addButton(layer,800,720,390,reward ? '回到街區 · 投餵守界梨' : '讀畢規則 · 領取貔貅',()=>this.handleChapterPointer(800,720),true);
+  }
+
   private companionCopy(): { intro: string; question: string; answers: [string, string]; win: string; lose: string; snack: string; stage: string; feed: string } {
-    const spot = companionSnackSpots.find((candidate) => candidate.id === this.activeSnackId) ?? companionSnackSpots[0];
+    const spot = getChapterFruitSpots(this.chapter).find(candidate => candidate.id === this.activeSnackId);
     const zhHans = getLocale() === 'zh-Hans';
-    const questions = zhHans ? {
-      獬豸: ['獬豸象征“明辨曲直”。两份说法冲突时，哪种做法体现它的属性？', '把证词逐项和原始记录核对', '选择和自己熟悉的人站在一起', '你让判断回到证据上，获得獬豸灵兽饼。', '关系不能代替证据。先核对，再判断。'],
-      白泽: ['白泽象征“求证核实”。听见审批传闻后，应先做什么？', '查阅日期、签名和流转记录', '立刻把传闻转发给所有人', '你先求证再传播，获得白泽灵兽饼。', '传闻需要证据支撑，先把来源查清。'],
-      貔貅: ['貔貅提醒“守住边界”。有人送礼请你插队时，该怎样回应？', '拒收并按程序记录来意', '先收下，之后再考虑', '你守住了边界，获得貔貅灵兽饼。', '便利不能用礼物交换；应保持独立判断。'],
-      麒麟: ['麒麟象征“克制私欲”。证据不足却被催着结案时，应该？', '写明未知并继续核实', '先给出一个猜测性的结论', '你克制了求快的冲动，获得麒麟灵兽饼。', '不完整的证据不能支撑定论。'],
-      玄武: ['玄武象征“守责到底”。发现缺页账目后，哪一步最重要？', '记录缺页并追查经手流程', '假设只是放错位置而不再跟进', '你没有放下责任，获得玄武灵兽饼。', '发现异常后应留下记录并推动核实。'],
-      青龙: ['青龙象征“公开透明”。涉及公共款项的审批，应优先做到什么？', '让可核对的依据完整留痕', '只向熟人私下说明', '你让流程可被追溯，获得青龙灵兽饼。', '公开留痕才能让监督真正发生。'],
-    } : {
-      獬豸: ['獬豸象徵「明辨曲直」。兩份說法衝突時，哪種做法體現牠的屬性？', '把證詞逐項和原始記錄核對', '選擇和自己熟悉的人站在一起', '你讓判斷回到證據上，獲得獬豸靈獸餅。', '關係不能代替證據。先核對，再判斷。'],
-      白泽: ['白澤象徵「求證核實」。聽見審批傳聞後，應先做甚麼？', '查閱日期、簽名和流轉記錄', '立刻把傳聞轉發給所有人', '你先求證再傳播，獲得白澤靈獸餅。', '傳聞需要證據支撐，先把來源查清。'],
-      貔貅: ['貔貅提醒「守住邊界」。有人送禮請你插隊時，該怎樣回應？', '拒收並按程序記錄來意', '先收下，之後再考慮', '你守住了邊界，獲得貔貅靈獸餅。', '便利不能用禮物交換；應保持獨立判斷。'],
-      麒麟: ['麒麟象徵「克制私欲」。證據不足卻被催着結案時，應該？', '寫明未知並繼續核實', '先給出一個猜測性的結論', '你克制了求快的衝動，獲得麒麟靈獸餅。', '不完整的證據不能支撐定論。'],
-      玄武: ['玄武象徵「守責到底」。發現缺頁帳目後，哪一步最重要？', '記錄缺頁並追查經手流程', '假設只是放錯位置而不再跟進', '你沒有放下責任，獲得玄武靈獸餅。', '發現異常後應留下記錄並推動核實。'],
-      青龙: ['青龍象徵「公開透明」。涉及公共款項的審批，應優先做到甚麼？', '讓可核對的依據完整留痕', '只向熟人私下說明', '你讓流程可被追溯，獲得青龍靈獸餅。', '公開留痕才能讓監督真正發生。'],
-    };
-    const [question, correct, wrong, win, lose] = questions[spot.spirit];
+    const [question, correct, wrong] = spiritQuestions[this.selectedSpirit][spot?.questionIndex ?? 0];
+    const win = '答對了！' + fruitNames[this.selectedSpirit] + '已存入專屬背包。';
+    const lose = '先回到這隻精靈的品德，再想一想。';
     const stageId = getCompanionGrowthStage(this.companionProgress.fed).id;
-    const stage = zhHans
-      ? ({ young: '幼体 · 初识曲直', growing: '成长体 · 明辨是非', guardian: '守护体 · 持正护明' } as const)[stageId]
-      : ({ young: '幼體 · 初識曲直', growing: '成長體 · 明辨是非', guardian: '守護體 · 持正護明' } as const)[stageId];
+    const form = getSpirit(this.selectedSpirit).forms.find(form => form.id === stageId)!;
+    const stage = zhHans ? form.hans : form.hant;
     return {
-      intro: zhHans ? '守正之灵 · 獬豸。地图上的发光零食需要先答题领取；带回来的零食可以由你亲手投喂。' : '守正之靈 · 獬豸。地圖上的發光零食需要先答題領取；帶回來的零食可以由你親手投餵。',
+      intro: spiritNames[this.selectedSpirit] + '只接受' + fruitNames[this.selectedSpirit] + '。每幕六道專屬問題；累計投餵3次成長，6次進入守護形態。未領取精靈前可先收集果實。',
       question,
       answers: [correct, wrong],
       win,
       lose,
       snack: zhHans ? `零食 ${this.companionProgress.snacks} · 投喂 ${this.companionProgress.fed}/6 · 3次成长，6次守护` : `零食 ${this.companionProgress.snacks} · 投餵 ${this.companionProgress.fed}/6 · 3次成長，6次守護`,
       stage,
-      feed: zhHans ? '獬豸开心地接住零食，额上的金角泛起柔光。成长值 +1。' : '獬豸開心地接住零食，額上的金角泛起柔光。成長值 +1。',
+      feed: spiritNames[this.selectedSpirit] + '開心地接住' + fruitNames[this.selectedSpirit] + '，專屬成長值 +1。',
     };
   }
 
   private openCompanionPanel(): void {
     if (!this.companionUnlocked || this.companionLayer || this.dialogueLayer || this.chapterLayer) return;
+    this.activeSnackId = null;
     this.companionPanelMode = 'intro';
     this.renderCompanionPanel();
     if (this.companion) this.tweens.add({ targets: this.companion, scaleX: this.companion.scaleX * 1.1, scaleY: this.companion.scaleY * 1.1, yoyo: true, duration: 210, repeat: 1 });
   }
 
   private openSnackQuiz(snackId: string): void {
-    if (!this.companionUnlocked || this.companionLayer) return;
+    if (this.companionLayer || this.dialogueLayer || this.chapterLayer) return;
     this.activeSnackId = snackId;
+    this.selectedSpirit = getChapterFruitSpots(this.chapter).find(spot => spot.id === snackId)?.spiritId ?? 'xiezhi';
     this.companionPanelMode = 'quiz';
     this.renderCompanionPanel();
   }
@@ -1472,9 +1571,9 @@ export class WorldScene extends Phaser.Scene {
     layer.add(this.add.rectangle(WIDTH / 2, HEIGHT / 2, WIDTH, HEIGHT, 0x071019, .68));
     layer.add(this.add.rectangle(WIDTH / 2, HEIGHT / 2, 1050, 580, 0x102a37, .98).setStrokeStyle(3, 0xe9c66f));
     const form = getCompanionGrowthStage(this.companionProgress.fed);
-    layer.add(this.add.image(460, 620, form.id === 'young' ? 'xiezhi-sprites' : `companion-${form.id}`, 0).setDisplaySize(form.id === 'young' ? 230 : 300, form.id === 'young' ? 230 : 400).setOrigin(.5, 1));
+    layer.add(this.add.image(460, 620, this.selectedSpirit !== 'xiezhi' ? 'world-' + this.selectedSpirit + '-' + form.id : form.id === 'young' ? 'xiezhi-sprites' : `companion-${form.id}`, 0).setDisplaySize(form.id === 'young' ? 230 : 300, this.selectedSpirit === 'xiezhi' && form.id === 'young' ? 230 : (form.id === 'young' ? 230 : 300) * 724 / 543).setOrigin(.5, 1));
     layer.add(localizedText(this, 650, 228, getLocale() === 'zh-Hans' ? '伙伴档案 · 触碰回应' : '夥伴檔案 · 觸碰回應', { fontSize: '19px', color: '#e9c66f' }));
-    layer.add(localizedText(this, 650, 282, t('companionName'), { fontSize: '35px', color: '#fff0cf', fontStyle: 'bold' }));
+    layer.add(localizedText(this, 650, 282, spiritNames[this.selectedSpirit] + ' · ' + fruitNames[this.selectedSpirit], { fontSize: '35px', color: '#fff0cf', fontStyle: 'bold' }));
     layer.add(localizedText(this, 650, 336, copy.snack, { fontSize: '18px', color: '#a7c9be' }));
     layer.add(localizedText(this, 650, 363, copy.stage, { fontSize: '17px', color: '#e9c66f', fontStyle: 'bold' }));
     const body = this.companionPanelMode === 'intro' ? copy.intro : this.companionPanelMode === 'quiz' ? copy.question : this.companionPanelMode === 'feed' ? copy.feed : message || copy.win;
@@ -1504,6 +1603,7 @@ export class WorldScene extends Phaser.Scene {
       this.saveCompanionProgress();
       this.snackMarkers.get(this.activeSnackId)?.destroy(true);
       this.snackMarkers.delete(this.activeSnackId);
+      this.addSnackPickups(this.area);
       for (let i = 0; i < 8; i += 1) {
         const spark = this.add.circle(this.player.x, this.player.y - 65, 4 + i % 3, 0xffd679).setDepth(137);
         this.tweens.add({ targets: spark, x: spark.x + Math.cos(i * Math.PI / 4) * 100, y: spark.y + Math.sin(i * Math.PI / 4) * 80, alpha: 0, duration: 650, onComplete: () => spark.destroy() });
@@ -1515,17 +1615,19 @@ export class WorldScene extends Phaser.Scene {
 
   private feedCompanion(): void {
     const before = getCompanionGrowthStage(this.companionProgress.fed).id;
+    const unlockedPet = this.selectedSpirit === 'xiezhi' ? this.companionUnlocked : this.selectedSpirit === 'baize' ? this.secondAct.rewardClaimed : this.thirdReward;
+    if (!unlockedPet) { this.showToast('果實已保存，完成本幕並領取精靈後即可投餵。'); return; }
     const next = feedCompanion(this.companionProgress);
     if (!next) return;
     this.companionProgress = next;
     this.saveCompanionProgress();
     const after = getCompanionGrowthStage(next.fed).id;
-    if (before !== after) this.showToast(getLocale() === 'zh-Hans' ? '獬豸进化了！新形态已加入同行。' : '獬豸進化了！新形態已加入同行。');
+    if (before !== after) this.showToast(spiritNames[this.selectedSpirit] + '進化了！新形態已加入同行。');
     this.companionPanelMode = 'feed';
     this.renderCompanionPanel();
     const layer = this.companionLayer;
     if (!layer) return;
-    const snack = this.add.image(790, 650, 'spirit-biscuit').setDisplaySize(62, 62);
+    const snack = this.add.image(790, 650, 'fruit-' + this.selectedSpirit).setDisplaySize(62, 62);
     const heart = localizedText(this, 460, 430, '♥', { fontSize: '54px', color: '#ff9a9e', fontStyle: 'bold', stroke: '#fff1c5', strokeThickness: 4 }).setOrigin(.5).setAlpha(0);
     layer.add([snack, heart]);
     this.tweens.add({ targets: snack, x: 460, y: 510, scaleX: .45, scaleY: .45, duration: 620, ease: 'Cubic.easeIn', onComplete: () => {
@@ -1602,7 +1704,7 @@ export class WorldScene extends Phaser.Scene {
   private onTouchAction = (event: CustomEvent<string>): void => {
     if (event.detail === 'help') this.toggleHelp();
     if (event.detail === 'interact') {
-      if (this.chapterLayer) { if (this.chapter === 2) this.handleChapterPointer(800, 720); else if (this.chapterPage === 'law') this.claimCompanionAndShowNext(); else this.enterActTwo(); return; }
+      if (this.chapterLayer) { if (this.chapter >= 2) this.handleChapterPointer(800, 720); else if (this.chapterPage === 'law') this.claimCompanionAndShowNext(); else this.enterActTwo(); return; }
       if (this.helpLayer) return;
       if (this.dialogueLayer) this.confirmDialogue();
       else if (this.nearbyInteraction) this.openDialogue(this.nearbyInteraction);
