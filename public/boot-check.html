@@ -1,0 +1,8 @@
+<!doctype html><meta charset="utf-8"><title>遊戲載入診斷</title><style>body{background:#102631;color:#fff0cf;font:18px sans-serif;padding:24px}a{color:#ecc766}pre{white-space:pre-wrap}</style><h1>遊戲載入診斷</h1><p>圖片下載、解碼及畫面更新狀態。不會讀取或更改遊戲存檔。</p><a href="./">回到遊戲</a><pre id="status">Starting</pre><script type="module">
+const imageUrl='./assets/tutorial-courtyard-CynhE4Vs.png';
+const state={frames:0,direct:'pending',blob:'pending',xhr:'pending'};
+const render=()=>document.querySelector('#status').textContent=JSON.stringify(state,null,2);
+const direct=new Image();direct.onload=()=>{state.direct='decoded '+direct.naturalWidth;render();};direct.onerror=()=>{state.direct='failed';render();};direct.src=imageUrl;
+const xhr=new XMLHttpRequest();xhr.open('GET',imageUrl);xhr.responseType='blob';xhr.onload=()=>{state.xhr='downloaded '+xhr.response.size;render();const image=new Image();image.onload=()=>{state.blob='decoded '+image.naturalWidth;render();URL.revokeObjectURL(image.src);};image.onerror=()=>{state.blob='failed';render();};image.src=URL.createObjectURL(xhr.response);};xhr.onerror=()=>{state.xhr='failed';render();};xhr.send();
+function frame(){state.frames++;if(state.frames<120)requestAnimationFrame(frame);}requestAnimationFrame(frame);setInterval(render,1000);render();
+</script>
