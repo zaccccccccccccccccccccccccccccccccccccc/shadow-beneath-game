@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { trackSceneLoading, sceneAssetsFailed } from './scene-loading';
 import tutorialBackground from '../assets/tutorial-courtyard.png';
 import protagonistBust from '../assets/character-protagonist-expressions.png';
 import mentorBust from '../assets/rong-jie-expressions.png';
@@ -24,16 +25,15 @@ export class IntroScene extends Phaser.Scene {
   constructor() { super('intro'); }
 
   preload(): void {
-    this.load.maxParallelDownloads = 4;
-    this.load.on('loaderror', (file: Phaser.Loader.File) => {
-      window.dispatchEvent(new CustomEvent('under-shadow-load-error', { detail: { file: file.src } }));
-    });
+    trackSceneLoading(this);
     this.load.image('intro-courtyard', tutorialBackground);
     this.load.spritesheet('intro-player-bust', protagonistBust, { frameWidth: 724, frameHeight: 724 });
     this.load.spritesheet('intro-mentor-bust', mentorBust, { frameWidth: 724, frameHeight: 724 });
   }
 
   create(): void {
+    if (sceneAssetsFailed(this)) return;
+    document.body.dataset.bootStage = 'intro-create';
     this.index = 0;
     this.transitioning = false;
     this.advancing = false;

@@ -23,10 +23,10 @@
         <input id="music-enabled" type="checkbox" checked />
         <span id="music-label">背景音樂</span>
       </label>
-      <button id="start-game" type="button">進入檔案</button>
-      <button id="continue-game" type="button" hidden>繼續調查</button>
-      <button id="view-character-gallery" type="button">人物表情檔案預覽</button>
-      <button id="start-walk-lab" type="button">測試靈獸步態</button>
+      <button id="start-game" type="button" disabled>進入檔案</button>
+      <button id="continue-game" type="button" disabled hidden>繼續調查</button>
+      <button id="view-character-gallery" type="button" disabled>人物表情檔案預覽</button>
+      <button id="start-walk-lab" type="button" disabled>測試靈獸步態</button>
     </section>
     <section id="asset-loading" role="status" aria-live="polite" data-visible="false">
       <div class="asset-loading-card">
@@ -34,6 +34,8 @@
         <h2 id="asset-loading-title">正在載入場景</h2>
         <progress id="asset-loading-progress" max="1" value="0"></progress>
         <p id="asset-loading-detail">正在準備地圖與人物美術…</p>
+        <button id="retry-loading" type="button" hidden>重新載入 · 保留存檔</button>
+        <button id="compatible-renderer" type="button" hidden>使用相容顯示模式</button>
       </div>
     </section>
     <aside id="orientation-tip" role="status" aria-live="polite">

@@ -17,7 +17,12 @@ import './music-ui.css';
 
 function startGame(mode: 'game' | 'resume' | 'walk-lab' | 'gallery' = 'game'): void {
   new Phaser.Game({
-    type: Phaser.AUTO,
+    type: new URLSearchParams(location.search).get('renderer') === 'canvas' ? Phaser.CANVAS : Phaser.AUTO,
+    loader: { imageLoadType: 'HTMLImageElement', timeout: 30000 },
+    callbacks: { postBoot: game => {
+      document.body.dataset.renderer = game.renderer.type === Phaser.CANVAS ? 'canvas' : 'webgl';
+      document.body.dataset.bootStage = 'engine-ready';
+    } },
     parent: 'app',
     width: 1600,
     height: 900,
@@ -40,6 +45,11 @@ const loadingOverlay = document.querySelector<HTMLElement>('#asset-loading');
 const loadingTitle = document.querySelector<HTMLElement>('#asset-loading-title');
 const loadingDetail = document.querySelector<HTMLElement>('#asset-loading-detail');
 const loadingProgress = document.querySelector<HTMLProgressElement>('#asset-loading-progress');
+const retryLoading = document.querySelector<HTMLButtonElement>('#retry-loading');
+const compatibleRenderer = document.querySelector<HTMLButtonElement>('#compatible-renderer');
+let lastLoadProgressAt = 0;
+retryLoading?.addEventListener('click', () => location.reload());
+compatibleRenderer?.addEventListener('click', () => { const url = new URL(location.href); url.searchParams.set('renderer', 'canvas'); location.assign(url.href); });
 const localeFields: Array<[string, Parameters<typeof t>[0]]> = [
   ['gate-kicker', 'gateKicker'], ['game-title', 'gameTitle'], ['gate-help', 'gateHelp'], ['name-label', 'nameLabel'],
   ['language-label', 'languageLabel'], ['start-game', 'start'], ['rotate-title', 'rotateTitle'], ['rotate-body', 'rotateBody'], ['continue-portrait', 'continuePortrait'],
@@ -90,24 +100,30 @@ let introReady = false;
 let initialLoadFailed = false;
 window.addEventListener('under-shadow-intro-ready', () => {
   introReady = true;
+  if (loadingOverlay) loadingOverlay.dataset.visible = 'false';
+  document.body.dataset.bootStage = 'intro-ready';
   gate?.remove();
 }, { once: true });
 window.addEventListener('under-shadow-load-progress', (event) => {
-  const detail = (event as CustomEvent<{ progress: number; label?: string }>).detail;
+  const detail = (event as CustomEvent<{ progress: number; label?: string; stage?: string }>).detail;
+  lastLoadProgressAt = Date.now();
+  if (initialLoadFailed) return;
   if (!loadingOverlay || !loadingTitle || !loadingProgress || !loadingDetail) return;
   loadingOverlay.dataset.visible = 'true';
-  loadingTitle.textContent = getLocale() === 'zh-Hans' ? '正在载入调查区域' : '正在載入調查區域';
+  loadingTitle.textContent = getLocale() === 'zh-Hans' ? (detail.stage === 'intro' ? '正在载入序幕' : '正在载入调查区域') : (detail.stage === 'intro' ? '正在載入序幕' : '正在載入調查區域');
   loadingProgress.value = detail.progress;
   loadingDetail.textContent = detail.label || (getLocale() === 'zh-Hans' ? `资源载入 ${Math.round(detail.progress * 100)}%` : `資源載入 ${Math.round(detail.progress * 100)}%`);
 });
 window.addEventListener('under-shadow-load-error', (event) => {
   const detail = (event as CustomEvent<{ file: string }>).detail;
   const fileName = detail.file.split(/[\\/]/).pop() || detail.file;
-  initialLoadFailed ||= !introReady;
+  initialLoadFailed = true;
+  if (retryLoading) retryLoading.hidden = false;
+  if (compatibleRenderer) compatibleRenderer.hidden = false;
   if (loadingOverlay && loadingTitle && loadingDetail) {
     loadingOverlay.dataset.visible = 'true';
     loadingTitle.textContent = getLocale() === 'zh-Hans' ? '有游戏素材未能加载' : '有遊戲素材未能載入';
-    loadingDetail.textContent = `${fileName} · ${getLocale() === 'zh-Hans' ? '请确认部署时包含完整 assets 文件夹' : '請確認部署時包含完整 assets 資料夾'}`;
+    loadingDetail.textContent = `${fileName} · ${getLocale() === 'zh-Hans' ? '网络或素材解码失败，可重新载入重试；存档会保留。' : '網絡或素材解碼失敗，可重新載入重試；存檔會保留。'}`;
   }
   const help = gate?.querySelector('#gate-help');
   if (!introReady && help) help.textContent = getLocale() === 'zh-Hans' ? `素材加载失败：${fileName}` : `素材載入失敗：${fileName}`;
@@ -115,10 +131,18 @@ window.addEventListener('under-shadow-load-error', (event) => {
 window.addEventListener('under-shadow-world-ready', () => {
   if (loadingOverlay) loadingOverlay.dataset.visible = 'false';
 }, { once: true });
+window.setInterval(() => {
+  if (!gameStarted || document.body.dataset.gameUi !== 'loading' || initialLoadFailed || Date.now() - lastLoadProgressAt < 30000) return;
+  if (retryLoading) retryLoading.hidden = false;
+  if (compatibleRenderer) compatibleRenderer.hidden = false;
+  if (loadingDetail) loadingDetail.textContent = getLocale() === 'zh-Hans' ? '连接较慢，可继续等待，或重新载入；存档会保留。' : '連線較慢，可繼續等待，或重新載入；存檔會保留。';
+}, 1000);
 const begin = (resume = false) => {
   if (gameStarted) return;
   gameStarted = true;
   document.body.dataset.gameUi = 'loading';
+  lastLoadProgressAt = Date.now();
+  if (loadingOverlay) loadingOverlay.dataset.visible = 'true';
   if (startButton) startButton.disabled = true;
   setPlayerName(nameInput?.value ?? '');
   const help = gate?.querySelector('#gate-help');
@@ -128,13 +152,7 @@ const begin = (resume = false) => {
     startGame(resume ? 'resume' : 'game');
     if (resume) { introReady = true; gate?.remove(); }
     setupMobileControls();
-    window.setTimeout(() => {
-      if (!introReady && !initialLoadFailed && gate?.isConnected && help) {
-        help.textContent = getLocale() === 'zh-Hans'
-          ? '载入时间较长，请确认 index.html 与 assets 文件夹已完整上传。'
-          : '載入時間較長，請確認 index.html 與 assets 資料夾已完整上傳。';
-      }
-    }, 15000);
+
   } catch (error) {
     gameStarted = false;
     document.body.dataset.gameUi = 'gate';
@@ -168,6 +186,7 @@ continueButton?.addEventListener('click', () => begin(true));
 walkLabButton?.addEventListener('click', beginWalkLab);
 characterGalleryButton?.addEventListener('click', beginCharacterGallery);
 nameInput?.addEventListener('keydown', (event) => { if (event.key === 'Enter') begin(); });
+[startButton, continueButton, walkLabButton, characterGalleryButton].forEach(button => { if (button) button.disabled = false; });
 
 if (new URLSearchParams(window.location.search).has('walk-lab')) beginWalkLab();
 if (new URLSearchParams(window.location.search).has('characters')) beginCharacterGallery();
