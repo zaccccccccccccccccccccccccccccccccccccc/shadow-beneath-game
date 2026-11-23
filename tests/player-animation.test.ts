@@ -1,42 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { getVerticalWalkRow } from '../src/game/player-animation';
+import { getSideWalkSprite, getVerticalWalkRow } from '../src/game/player-animation';
 
-it('matches the vertical two-pose cycle to the horizontal four-pose 192px stride', () => {
-  expect([0, 48, 95, 96, 144, 191, 192].map(getVerticalWalkRow)).toEqual([1,1,1,2,2,2,1]);
-});
-import { getSideWalkPose, getSideWalkSprite, getWalkFrameForDistance, getWalkFrameSequence, isMirroredWalkDirection } from '../src/game/player-animation';
-
-describe('player walk-cycle direction mapping', () => {
-  it('alternates the left and right leg frames for all facing directions', () => {
-    expect(getWalkFrameSequence('front')).toEqual([0, 3]);
-    expect(getWalkFrameSequence('left')).toEqual([1, 4]);
-    expect(getWalkFrameSequence('right')).toEqual([1, 4]);
-    expect(getWalkFrameSequence('back')).toEqual([2, 5]);
+describe('world renderer walking poses', () => {
+  it('holds vertical steps for the same 192px full cycle as side steps', () => {
+    expect([0,48,95,96,144,191,192].map(getVerticalWalkRow)).toEqual([1,1,1,2,2,2,1]);
   });
-
-  it('mirrors the side walk cycle only when facing right', () => {
-    expect(isMirroredWalkDirection('left')).toBe(false);
-    expect(isMirroredWalkDirection('right')).toBe(true);
-    expect(isMirroredWalkDirection('front')).toBe(false);
-    expect(isMirroredWalkDirection('back')).toBe(false);
+  it('uses all four approved side poses and mirrors only left', () => {
+    expect([0,48,96,144,192].map(d => getSideWalkSprite('right', d).frame)).toEqual([0,1,2,3,0]);
+    for (const d of [0,48,96,144]) {
+      expect(getSideWalkSprite('right',d).flipX).toBe(false);
+      expect(getSideWalkSprite('left',d).flipX).toBe(true);
+    }
   });
-
-  it('changes the leading foot after each traveled stride, including after a pause', () => {
-    expect(getWalkFrameForDistance('left', 0)).toBe(1);
-    expect(getWalkFrameForDistance('left', 35)).toBe(1);
-    expect(getWalkFrameForDistance('left', 36)).toBe(4);
-    expect(getWalkFrameForDistance('left', 72)).toBe(1);
-    expect(getWalkFrameForDistance('front', 36)).toBe(3);
-  });
-
-  it('uses both raised-leg poses in each full side-walk cycle', () => {
-    expect([0, 24, 48, 72, 96].map(getSideWalkPose)).toEqual([
-      'wide', 'rear-lift', 'passing', 'front-lift', 'wide',
-    ]);
-  });
-
-  it('uses the approved right-side source frames and mirrors them for left movement', () => {
-    expect([0, 48, 96, 144].map(d => getSideWalkSprite('right', d).frame)).toEqual([0, 1, 2, 3]);
-    expect([0, 48, 96, 144].map(d => getSideWalkSprite('left', d).flipX)).toEqual([true, true, true, true]);
+  it('aligns measured head anchors without changing the foot baseline', () => {
+    for (const [frame, center] of [332.5,275.5,333.5,278.5].entries()) {
+      const right=getSideWalkSprite('right',frame*48), left=getSideWalkSprite('left',frame*48);
+      expect((center-313.5)*123/627+right.offsetX).toBeCloseTo(0,8);
+      expect(left.offsetX).toBeCloseTo(-right.offsetX,8);
+    }
   });
 });

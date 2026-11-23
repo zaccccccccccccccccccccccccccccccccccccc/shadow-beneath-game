@@ -24,6 +24,20 @@ try {
   await page.waitForFunction(()=>document.querySelector('#asset-loading')?.dataset.visible==='false');
   report.initialSave=await page.evaluate(()=>({chapter:localStorage.getItem('under-shadow-current-chapter'),pet:localStorage.getItem('under-shadow-xiezhi-chapter1-claimed-v2'),checkpoint:JSON.parse(localStorage.getItem('under-shadow-world-checkpoint-v1'))}));
   assert.equal(report.initialSave.pet,null);assert.equal(report.initialSave.checkpoint.area,'hq');
+  await page.mouse.move(5, 10);
+  report.movement = [];
+  for (const [key, sign] of [['ArrowRight', 1], ['ArrowLeft', -1]]) {
+    const before = await page.evaluate(() => JSON.parse(localStorage.getItem('under-shadow-world-checkpoint-v1')).position);
+    await page.keyboard.down(key);
+    try {
+      await page.waitForFunction(({ x, sign }) => {
+        const save = JSON.parse(localStorage.getItem('under-shadow-world-checkpoint-v1'));
+        return sign * (save.position.x - x) > 70;
+      }, { x: before.x, sign }, { timeout: 5000 });
+    } finally { await page.keyboard.up(key); }
+    const after = await page.evaluate(() => JSON.parse(localStorage.getItem('under-shadow-world-checkpoint-v1')).position);
+    report.movement.push({key, before, after});
+  }
   for(const [key,mode] of [['m','map'],['l','notebook'],['p','dialogue'],['h','help']]){
     await page.keyboard.press(key,{delay:80});
     await page.waitForFunction(mode=>document.body.dataset.gameUi===mode,mode);

@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { facingFromMotion, nextPathIndex, WORLD_MOVEMENT_KEYS } from './locomotion';
 import { CHECKPOINT_KEY } from './save-session';
 import { legalLearning } from './legal-learning';
 import { lateActs, type LateActNumber } from './late-acts';
@@ -745,19 +746,14 @@ export class WorldScene extends Phaser.Scene {
 
   private createInput(): void {
     const keys = this.input.keyboard;
-    keys?.addKeys('W,A,S,D');
-    this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
-      if (this.dialogueLayer || this.mapLayerUi || this.notebookLayer || pointer.wasTouch) return;
-      this.pointerAim = { x: pointer.x, y: pointer.y };
-      const angleX = pointer.worldX - this.player.x;
-      const angleY = pointer.worldY - this.player.y;
-      if (Math.hypot(angleX, angleY) > 28) this.setFacing(this.facingFor(angleX, angleY));
-    });
+    keys?.addKeys(WORLD_MOVEMENT_KEYS);
+    this.game.canvas.addEventListener('pointermove', this.onCanvasPointerMove);
     this.game.canvas.addEventListener('pointerup', this.onCanvasPointerUp, true);
     this.game.canvas.addEventListener('pointerdown', this.onCanvasPointerDown, true);
     this.game.canvas.addEventListener('wheel', this.onCanvasWheel, { passive: false });
     this.game.canvas.addEventListener('pointerleave', this.clearPointerAim);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+      this.game.canvas.removeEventListener('pointermove', this.onCanvasPointerMove);
       this.game.canvas.removeEventListener('pointerup', this.onCanvasPointerUp, true);
       this.game.canvas.removeEventListener('pointerdown', this.onCanvasPointerDown, true);
       this.game.canvas.removeEventListener('wheel', this.onCanvasWheel);
@@ -765,6 +761,21 @@ export class WorldScene extends Phaser.Scene {
     });
     void keys;
   }
+
+  private onCanvasPointerMove = (event: PointerEvent): void => {
+    if (event.pointerType === 'touch' || this.transitioning || this.dialogueLayer || this.companionLayer || this.mapLayerUi || this.notebookLayer || this.helpLayer || this.chapterLayer) return;
+    const bounds = this.game.canvas.getBoundingClientRect();
+    if (!bounds.width || !bounds.height) return;
+    const point = toGamePoint(event.clientX, event.clientY, bounds, WIDTH, HEIGHT);
+    const hudVisible = !this.objectiveHudObjects.length || (this.objectiveHudObjects[0] as Phaser.GameObjects.Image).alpha > .5;
+    if (hudVisible && point.x >= 24 && point.x <= 464 && point.y >= 24 && point.y <= (this.touchLayout ? 184 : 300)) return;
+    if (hudVisible && !this.touchLayout && point.x >= 42 && point.x <= 246 && point.y >= 286 && point.y <= 344) return;
+    if (point.x >= WIDTH - 280 && point.y <= 225 && this.miniGraphics.alpha > .5) return;
+    if (!this.touchLayout && hitsButton(point.x, point.y, 1440, 850, 240, 48)) return;
+    this.pointerAim = point;
+    const world = this.cameras.main.getWorldPoint(point.x, point.y);
+    if (Math.hypot(world.x - this.player.x, world.y - this.player.y) > 28) this.setFacing(this.facingFor(world.x - this.player.x, world.y - this.player.y));
+  };
 
   private clearPointerAim = (): void => { this.pointerAim = null; };
 
@@ -841,6 +852,7 @@ export class WorldScene extends Phaser.Scene {
   };
 
   private onCanvasPointerDown = (event: PointerEvent): void => {
+    if (event.pointerType === 'touch') this.clearPointerAim();
     const bounds = this.game.canvas.getBoundingClientRect();
     if (!bounds.width || !bounds.height) return;
     const point = toGamePoint(event.clientX, event.clientY, bounds, WIDTH, HEIGHT);
@@ -914,17 +926,13 @@ export class WorldScene extends Phaser.Scene {
       this.pathIndex = 0;
       this.moveTarget.set(this.player.x + dx * 100, this.player.y + dy * 100);
       this.setFacing(this.facingFor(dx, dy));
-    } else if (this.pathIndex < this.path.length) {
-      this.moveTarget.copy(this.path[this.pathIndex]);
-      if (Phaser.Math.Distance.Between(this.player.x, this.player.y, this.moveTarget.x, this.moveTarget.y) < 24) {
-        this.pathIndex += 1;
-        if (this.pathIndex < this.path.length) this.moveTarget.copy(this.path[this.pathIndex]);
-      }
     } else {
-      this.moveTarget.set(this.player.x, this.player.y);
+      this.pathIndex = nextPathIndex(this.player, this.path, this.pathIndex);
+      if (this.pathIndex < this.path.length) this.moveTarget.copy(this.path[this.pathIndex]);
+      else this.moveTarget.set(this.player.x, this.player.y);
     }
     const distance = Phaser.Math.Distance.Between(this.player.x, this.player.y, this.moveTarget.x, this.moveTarget.y);
-    if (distance < 4) {
+    if (distance <= 2) {
       this.walking = false;
       this.syncPlayerPose();
       if (Phaser.Math.Distance.Between(this.player.x, this.player.y, 1190, 1120) > 90 && !this.tutorial.moved) { this.tutorial.moved = true; this.updateObjectives(true); }
@@ -940,8 +948,8 @@ export class WorldScene extends Phaser.Scene {
     const moved = next.moved;
     if (moved) this.gaitDistance += Math.hypot(next.x - previousX, next.y - previousY);
     if (moved && Phaser.Math.Distance.Between(this.player.x, this.player.y, 1190, 1120) > 90 && !this.tutorial.moved) { this.tutorial.moved = true; this.updateObjectives(true); }
-    this.setFacing(this.facingFor(this.moveTarget.x - this.player.x, this.moveTarget.y - this.player.y));
     this.walking = moved;
+    if (moved) this.facing = facingFromMotion(next.x - previousX, next.y - previousY, this.facing);
     this.syncPlayerPose();
   }
 
@@ -965,14 +973,13 @@ export class WorldScene extends Phaser.Scene {
     if (!route) return;
     this.path = route.map((point) => new Phaser.Math.Vector2(point.x, point.y));
     this.pathIndex = 0;
-    const last = this.path[this.path.length - 1];
+    const last = this.path[this.path.length - 1] ?? this.player;
     if (last && this.canOccupy(x, y) && Phaser.Math.Distance.Between(last.x, last.y, x, y) < 80) this.path.push(new Phaser.Math.Vector2(x, y));
     if (this.path.length) this.moveTarget.copy(this.path[0]);
   }
 
   private facingFor(dx: number, dy: number): Facing {
-    if (Math.abs(dx) > Math.abs(dy)) return dx < 0 ? 'left' : 'right';
-    return dy < 0 ? 'back' : 'front';
+    return facingFromMotion(dx, dy, this.facing);
   }
 
   private setFacing(facing: Facing): void {
@@ -986,7 +993,7 @@ export class WorldScene extends Phaser.Scene {
       // Left movement is their exact horizontal mirror so each leg exchange matches.
       const sprite = getSideWalkSprite(this.facing, this.gaitDistance);
       this.actorSprite.setTexture('player-side-approved', sprite.frame).setFlipX(sprite.flipX);
-      this.actorSprite.setDisplaySize(PLAYER_DISPLAY_WIDTH[this.facing], PLAYER_DISPLAY_HEIGHT).setY(0).setAngle(0);
+      this.actorSprite.setDisplaySize(PLAYER_DISPLAY_WIDTH[this.facing], PLAYER_DISPLAY_HEIGHT).setPosition(sprite.offsetX, 4).setAngle(0);
       return;
     }
     const col = ({ front: 0, left: 1, right: 2, back: 3 } as const)[this.facing];
@@ -994,7 +1001,7 @@ export class WorldScene extends Phaser.Scene {
       ? getVerticalWalkRow(this.gaitDistance)
       : (Math.floor(this.time.now / 220) % 19 === 0 ? 3 : 0);
     this.actorSprite.setTexture('player-walk-cycle', row * 4 + col).setFlipX(false)
-      .setDisplaySize(PLAYER_DISPLAY_WIDTH[this.facing], PLAYER_DISPLAY_HEIGHT).setY(0).setAngle(0);
+      .setDisplaySize(PLAYER_DISPLAY_WIDTH[this.facing], PLAYER_DISPLAY_HEIGHT).setPosition(0, 0).setAngle(0);
   }
 
   private updateNearby(): void {
@@ -1314,6 +1321,8 @@ export class WorldScene extends Phaser.Scene {
     if (this.transitioning) return;
     if (!this.portalUnlocked(portal)) { this.showToast(this.lockMessage(portal)); return; }
     this.clearSemiAutoArrow();
+    this.stopNavigation();
+    this.clearPointerAim();
     this.transitioning = true;
     this.areaPositions.set(this.area, { x: this.player.x, y: this.player.y });
     this.cameras.main.fadeOut(380, 5, 11, 18);
@@ -1553,7 +1562,7 @@ export class WorldScene extends Phaser.Scene {
     this.mapLayerUi?.destroy(true); this.mapLayerUi = null;
     this.clearSemiAutoArrow();
     this.areaPositions.set(this.area, { x: this.player.x, y: this.player.y });
-    this.pendingInteraction = null; this.path = []; this.pathIndex = 0;
+    this.stopNavigation(); this.clearPointerAim();
     this.transitioning = true;
     this.cameras.main.fadeOut(300, 5, 11, 18);
     this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {
@@ -2134,6 +2143,7 @@ export class WorldScene extends Phaser.Scene {
 
   private onTouchAxis = (event: CustomEvent<{ x: number; y: number }>): void => {
     this.touchAxis.set(event.detail.x, event.detail.y);
+    if (this.touchAxis.length() > .05) this.clearPointerAim();
   };
 
   private onTouchAction = (event: CustomEvent<string>): void => {
