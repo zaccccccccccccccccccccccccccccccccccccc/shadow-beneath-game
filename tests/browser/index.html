@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Local game browser sandbox</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #071019; color: #fff0cf; font: 14px sans-serif; }
+    header { height: 48px; display: flex; align-items: center; gap: 8px; padding: 4px 12px; }
+    header button { min-height: 38px; padding: 6px 14px; cursor: pointer; }
+    #status { white-space: pre-wrap; }
+    #sandbox-stage { width: 100%; height: calc(100% - 48px); }
+    canvas { display: block; touch-action: none; }
+    #error { position: fixed; inset: 55px 20px auto; z-index: 9999; white-space: pre-wrap; color: #ffaaaa; background: #071019; }
+  </style>
+</head>
+<body data-sandbox="loading">
+  <header>
+    <strong>LOCAL SANDBOX</strong>
+    <button id="sandbox-fresh" disabled>Fresh intro</button>
+    <button id="sandbox-resume" disabled>Resume save</button>
+    <span id="status" role="status">Loading scene modules…</span>
+  </header>
+  <main id="sandbox-stage"></main>
+  <pre id="error" hidden></pre>
+  <script type="module" src="./sandbox.ts"></script>
+</body>
+</html>

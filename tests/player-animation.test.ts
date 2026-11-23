@@ -1,4 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { getVerticalWalkRow } from '../src/game/player-animation';
+
+it('matches the vertical two-pose cycle to the horizontal four-pose 192px stride', () => {
+  expect([0, 48, 95, 96, 144, 191, 192].map(getVerticalWalkRow)).toEqual([1,1,1,2,2,2,1]);
+});
 import { getSideWalkPose, getSideWalkSprite, getWalkFrameForDistance, getWalkFrameSequence, isMirroredWalkDirection } from '../src/game/player-animation';
 
 describe('player walk-cycle direction mapping', () => {

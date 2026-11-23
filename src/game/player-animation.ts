@@ -1,5 +1,10 @@
 export type PlayerFacing = 'front' | 'back' | 'left' | 'right';
 
+/** Two front/back poses need twice the hold of the four side poses. */
+export function getVerticalWalkRow(traveledPixels: number): 1 | 2 {
+  return (Math.floor(Math.max(0, traveledPixels) / 96) % 2 + 1) as 1 | 2;
+}
+
 const walkFrames: Record<PlayerFacing, readonly [number, number]> = {
   front: [0, 3],
   left: [1, 4],

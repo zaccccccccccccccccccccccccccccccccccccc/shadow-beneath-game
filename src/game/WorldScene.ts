@@ -1,9 +1,11 @@
 import Phaser from 'phaser';
 import { CHECKPOINT_KEY } from './save-session';
-import { fourthActDraft } from './act-four';
+import { legalLearning } from './legal-learning';
+import { lateActs, type LateActNumber } from './late-acts';
+import { LATE_SAVE_KEY, emptyLateProgress, normalizeLateProgress, completeLateStep, claimLateReward, isLateActComplete, type LateProgress } from './campaign-progress';
 import { createWorldFruitLayout, fruitDescriptions, QUIZ_COOLDOWN_MS, cooldownSeconds, questionDifficulty, type WorldFruit } from './fruit-world';
-import { getSpirit } from './spirits';
-import { thirdActSteps, completeThirdActStep, thirdActComplete } from './act-three';
+import { getSpirit, spirits, type SpiritId } from './spirits';
+import { thirdActSteps, completeThirdActStep, thirdActComplete, restoreThirdActProgress } from './act-three';
 import { getChapterFruitSpots, spiritQuestions, spiritNames, fruitNames, type AvailableSpirit } from './chapter-fruits';
 import clarityFruit from '../assets/fruit-clarity.png';
 import testimonyFruit from '../assets/fruit-testimony.png';
@@ -13,13 +15,25 @@ import baizeGuardian from '../assets/spirit-baize-guardian-walk.png';
 import pixiuWalk from '../assets/spirit-pixiu-young-walk.png';
 import pixiuGrowing from '../assets/spirit-pixiu-growing-walk.png';
 import pixiuGuardian from '../assets/spirit-pixiu-guardian-walk.png';
+import qilinYoung from '../assets/spirit-qilin-young-walk.png';
+import qilinGrowing from '../assets/spirit-qilin-growing-walk.png';
+import qilinGuardian from '../assets/spirit-qilin-guardian-walk.png';
+import xuanwuYoung from '../assets/spirit-xuanwu-young-walk.png';
+import xuanwuGrowing from '../assets/spirit-xuanwu-growing-walk.png';
+import xuanwuGuardian from '../assets/spirit-xuanwu-guardian-walk.png';
+import qinglongYoung from '../assets/spirit-qinglong-young-walk.png';
+import qinglongGrowing from '../assets/spirit-qinglong-growing-walk.png';
+import qinglongGuardian from '../assets/spirit-qinglong-guardian-walk.png';
+import calmFruit from '../assets/fruit-calm.png';
+import recordFruit from '../assets/fruit-record.png';
+import daylightFruit from '../assets/fruit-daylight.png';
 import { getLocale, localizedText, t, type CopyKey } from './localization';
 import { canFastTravelTo, isChapterComplete } from './progression';
 import { getPlayerName } from './profile';
 import { createActTwoState, completeActTwoStep, getActTwoNextStep, isActTwoComplete, type ActTwoStep } from './act-two';
 import baizeRewardArt from '../assets/spirit-baize-evolution.png';
 import baizeWalk from '../assets/spirit-baize-young-walk-v3.png';
-import { getSideWalkSprite } from './player-animation';
+import { getSideWalkSprite, getVerticalWalkRow } from './player-animation';
 import { wrapCjkText } from './text-layout';
 import { hitsButton, toGamePoint } from './ui-hit-test';
 import { claimSnack, feedCompanion, getCompanionGrowthStage, getCompanionPose, getCompanionTrailPoint, type CompanionProgress, type TrailPoint } from './companion';
@@ -48,17 +62,12 @@ import campusBackground from '../assets/district-campus.png';
 import harborBackground from '../assets/district-harbor.png';
 import hillBackground from '../assets/district-hill.png';
 import npcAtlas from '../assets/investigation-npc-atlas.png';
-import playerBack from '../assets/player-lantern.png';
-import playerLeft from '../assets/player-left.png';
-import playerRight from '../assets/player-right.png';
-import playerFront from '../assets/player-front-full-optimized.png';
 import playerWalkCycle from '../assets/player-action-sheet.png';
 import playerSideApproved from '../assets/player-side-walk-v2.png';
 import xiezhiGuardian from '../assets/xiezhi-guardian.png';
 import xiezhiSpriteSheet from '../assets/xiezhi-sprite-sheet.png';
 import rongJieWorld from '../assets/rong-jie-world.png';
 import rongJieExpressions from '../assets/rong-jie-expressions.png';
-import spiritBiscuit from '../assets/spirit-biscuit.png';
 import protagonistExpressions from '../assets/character-protagonist-expressions.png';
 
 const WIDTH = 1600;
@@ -66,7 +75,7 @@ const HEIGHT = 900;
 const MOVE_SPEED = 300;
 const INTERACT_RADIUS = 120;
 const NPC_CELL = 443;
-const NPC_DISPLAY_SIZE = 132;
+const NPC_DISPLAY_SIZE = 176;
 const PLAYER_DISPLAY_HEIGHT = 180;
 const PLAYER_DISPLAY_WIDTH: Record<Facing, number> = { front: 119, back: 118, left: 123, right: 123 };
 const LIGHT_SCALE = 0.5;
@@ -84,7 +93,18 @@ type Facing = 'front' | 'back' | 'left' | 'right';
 interface Objective { key: CopyKey; complete: boolean; target?: string; title?: string }
 
 export class WorldScene extends Phaser.Scene {
-  private chapter: 1 | 2 | 3 = 1;
+  private chapter: 1 | 2 | 3 | 4 | 5 | 6 = 1;
+  private lateProgress: Record<LateActNumber, LateProgress> = { 4: emptyLateProgress(), 5: emptyLateProgress(), 6: emptyLateProgress() };
+  private lateFollowers = new Map<SpiritId, Phaser.GameObjects.Sprite>();
+  private activeDialogueActions: Array<() => void> = [];
+  private lateConclusionPage: 'rules' | 'reward' | 'finale' = 'rules';
+  private notebookPage = 0;
+  private companionRosterOpen = false;
+  private pointerAim: { x: number; y: number } | null = null;
+  private queuedKeys = new Set<Phaser.Input.Keyboard.Key>();
+  private miniHudObjects: Phaser.GameObjects.GameObject[] = [];
+  private objectiveHudObjects: Phaser.GameObjects.GameObject[] = [];
+  private activeToasts = new Set<Phaser.GameObjects.Text>();
   private checkpointReady = false;
   private lastCheckpointAt = 0;
 
@@ -119,6 +139,9 @@ export class WorldScene extends Phaser.Scene {
     xiezhi: { claimedSnackIds: [], snacks: 0, fed: 0 },
     baize: { claimedSnackIds: [], snacks: 0, fed: 0 },
     pixiu: { claimedSnackIds: [], snacks: 0, fed: 0 },
+    qilin: { claimedSnackIds: [], snacks: 0, fed: 0 },
+    xuanwu: { claimedSnackIds: [], snacks: 0, fed: 0 },
+    qinglong: { claimedSnackIds: [], snacks: 0, fed: 0 },
   };
   private thirdSteps: string[] = [];
   private thirdReward = false;
@@ -142,11 +165,15 @@ export class WorldScene extends Phaser.Scene {
       } catch { /* Keep stable positions for this session. */ }
       this.fruitLayout = createWorldFruitLayout(seed);
     }
-    return this.fruitLayout.filter((spot): spot is WorldFruit & { spiritId: AvailableSpirit } => spot.act <= this.chapter && spot.act <= 3 && !this.spiritProgress[spot.spiritId as AvailableSpirit].claimedSnackIds.includes(spot.id));
+    return this.fruitLayout.filter(spot => spot.act <= this.chapter && !this.spiritProgress[spot.spiritId].claimedSnackIds.includes(spot.id));
   }
 
   private ownsSpirit(id: AvailableSpirit): boolean {
-    return id === 'xiezhi' ? this.companionUnlocked : id === 'baize' ? this.secondAct.rewardClaimed : this.thirdReward;
+    if (getSpirit(id).unlockAct > this.chapter) return false;
+    if (id === 'xiezhi') return this.companionUnlocked;
+    if (id === 'baize') return this.secondAct.rewardClaimed && isActTwoComplete(this.secondAct);
+    if (id === 'pixiu') return this.thirdReward && thirdActComplete(this.thirdSteps);
+    return this.lateProgress[getSpirit(id).unlockAct as LateActNumber].rewardClaimed;
   }
 
   private secondAct = createActTwoState();
@@ -262,7 +289,7 @@ export class WorldScene extends Phaser.Scene {
     } catch { /* A new in-memory progress record remains available. */ }
     try {
       const stored = JSON.parse(localStorage.getItem('under-shadow-species-fruits-v1') || 'null');
-      if (stored) for (const id of ['xiezhi','baize','pixiu'] as AvailableSpirit[]) {
+      if (stored) for (const id of spirits.map(s => s.id)) {
         const p = stored[id];
         if (p && Array.isArray(p.claimedSnackIds)) this.spiritProgress[id] = { claimedSnackIds: p.claimedSnackIds.filter((v: unknown) => typeof v === 'string'), snacks: Math.max(0, Number(p.snacks) || 0), fed: Math.max(0, Number(p.fed) || 0) };
       }
@@ -278,6 +305,19 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private updateCompanion(delta: number): void {
+    let followerIndex = 0;
+    for (const [id, pet] of this.lateFollowers) {
+      const angle = Math.PI * (0.15 + followerIndex * .7);
+      const tx = this.player.x + Math.cos(angle) * 125;
+      const ty = this.player.y + 48 + Math.sin(angle) * 38;
+      pet.x += (tx - pet.x) * Math.min(1, delta / 240);
+      pet.y += (ty - pet.y) * Math.min(1, delta / 240);
+      const stage = getCompanionGrowthStage(this.spiritProgress[id].fed);
+      pet.setTexture('world-' + id + '-' + stage.id, this.walking ? Math.floor(this.gaitDistance / 48) % 4 : 0)
+        .setFlipX(this.facing === 'left').setDisplaySize(stage.size, stage.size * 724 / 543)
+        .setDepth(getFeetDepth(pet.y)).setAlpha(getWallOcclusionAlpha(pet.x, pet.y, districtMaps[this.area].blockers, DISTRICT_WIDTH, DISTRICT_HEIGHT));
+      followerIndex++;
+    }
     if (this.baizeFollower) {
       const dx = this.player.x - 100 - this.baizeFollower.x;
       const dy = this.player.y + 32 - this.baizeFollower.y;
@@ -319,6 +359,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private resetCompanionAfterTravel(): void {
+    for (const pet of this.lateFollowers.values()) pet.setPosition(this.player.x, this.player.y + 45);
     this.baizeFollower?.setPosition(this.player.x - 100, this.player.y + 32);
     this.pixiuFollower?.setPosition(this.player.x + 90, this.player.y + 35);
     this.companionTrail = [{ x: this.player.x - 55, y: this.player.y + 12 }];
@@ -334,10 +375,17 @@ export class WorldScene extends Phaser.Scene {
   }
 
   preload(): void {
-    for (const [key, asset] of Object.entries({ 'world-baize-young': baizeWalk, 'world-baize-growing': baizeGrowing, 'world-baize-guardian': baizeGuardian, 'world-pixiu-young': pixiuWalk, 'world-pixiu-growing': pixiuGrowing, 'world-pixiu-guardian': pixiuGuardian })) this.load.spritesheet(key, asset, { frameWidth: 543, frameHeight: 724 });
+    for (const [key, asset] of Object.entries({ 'world-baize-young': baizeWalk, 'world-baize-growing': baizeGrowing, 'world-baize-guardian': baizeGuardian, 'world-pixiu-young': pixiuWalk, 'world-pixiu-growing': pixiuGrowing, 'world-pixiu-guardian': pixiuGuardian,
+      'world-qilin-young': qilinYoung, 'world-qilin-growing': qilinGrowing, 'world-qilin-guardian': qilinGuardian,
+      'world-xuanwu-young': xuanwuYoung, 'world-xuanwu-growing': xuanwuGrowing, 'world-xuanwu-guardian': xuanwuGuardian,
+      'world-qinglong-young': qinglongYoung, 'world-qinglong-growing': qinglongGrowing, 'world-qinglong-guardian': qinglongGuardian,
+    })) this.load.spritesheet(key, asset, { frameWidth: 543, frameHeight: 724 });
     this.load.image('fruit-xiezhi', clarityFruit);
     this.load.image('fruit-baize', testimonyFruit);
     this.load.image('fruit-pixiu', boundaryFruit);
+    this.load.image('fruit-qilin', calmFruit);
+    this.load.image('fruit-xuanwu', recordFruit);
+    this.load.image('fruit-qinglong', daylightFruit);
     this.load.image('world-baize-reward', baizeRewardArt);
     loadCompanionForms(this);
     this.load.maxParallelDownloads = 4;
@@ -352,14 +400,9 @@ export class WorldScene extends Phaser.Scene {
     this.load.image('rong-jie-world', rongJieWorld);
     this.load.spritesheet('rong-jie-expressions', rongJieExpressions, { frameWidth: 724, frameHeight: 724 });
     this.load.spritesheet('protagonist-expressions', protagonistExpressions, { frameWidth: 724, frameHeight: 724 });
-    this.load.image('player-back', playerBack);
-    this.load.image('player-left', playerLeft);
-    this.load.image('player-right', playerRight);
-    this.load.image('player-front', playerFront);
     this.load.spritesheet('player-walk-cycle', playerWalkCycle, { frameWidth: 313, frameHeight: 313 });
     this.load.spritesheet('player-side-approved', playerSideApproved, { frameWidth: 627, frameHeight: 627 });
     this.load.image('xiezhi-guardian', xiezhiGuardian);
-    this.load.image('spirit-biscuit', spiritBiscuit);
     // The generated 4x4 sheet is 1254px square, so each cell is 313px; 256px
     // cuts through the creatures and makes a single pet render as fragments.
     this.load.spritesheet('xiezhi-sprites', xiezhiSpriteSheet, { frameWidth: 313, frameHeight: 313 });
@@ -368,6 +411,8 @@ export class WorldScene extends Phaser.Scene {
 
   create(): void {
     document.body.dataset.gameUi = 'world';
+    const atlas = this.textures.get('npc-atlas');
+    for (let i = 0; i < 8; i++) if (!atlas.has(`bust-${i}`)) atlas.add(`bust-${i}`, 0, (i % 4) * NPC_CELL + 90, Math.floor(i / 4) * NPC_CELL, 263, 270);
     this.area = 'hq';
     this.mapLayer = this.add.container(0, 0).setDepth(0);
     this.player = this.add.container(1190, 1120).setDepth(getFeetDepth(1120));
@@ -388,8 +433,9 @@ export class WorldScene extends Phaser.Scene {
     try { this.companionUnlocked = localStorage.getItem('under-shadow-xiezhi-chapter1-claimed-v2') === 'true'; } catch { this.companionUnlocked = false; }
     this.loadCompanionProgress();
     this.restoreWorldCheckpoint();
+    const savedHelpUses = this.helpUses;
     try { this.quizRetryAt = Number(localStorage.getItem('under-shadow-quiz-retry-at-v1')) || 0; } catch { /* No active cooldown. */ }
-    for (const id of ['xiezhi','baize','pixiu'] as AvailableSpirit[]) {
+    for (const id of spirits.map(s => s.id)) {
       this.spiritProgress[id].claimedSnackIds = this.spiritProgress[id].claimedSnackIds.map(key => {
         const oldIndex = companionSnackSpots.findIndex(spot => key === spot.id || key === id + ':' + spot.id);
         return oldIndex < 0 ? key : id + ':fruit-' + oldIndex;
@@ -404,16 +450,24 @@ export class WorldScene extends Phaser.Scene {
     this.createHud();
     this.createDialogueControls();
     this.createInput();
-    let savedChapterTwo = false;
-    try { savedChapterTwo = ['2', '3'].includes(localStorage.getItem('under-shadow-current-chapter') || ''); } catch { /* Use explicit entry. */ }
-    if (savedChapterTwo) {
+    let savedChapter = 1;
+    try {
+      savedChapter = Math.max(1, Math.min(6, Number(localStorage.getItem('under-shadow-current-chapter')) || 1));
+      const late = JSON.parse(localStorage.getItem(LATE_SAVE_KEY) || 'null');
+      for (const act of [4, 5, 6] as const) this.lateProgress[act] = normalizeLateProgress(late?.[act], lateActs[act].steps);
+    } catch { /* Use explicit entry and empty later progress. */ }
+    if (savedChapter >= 2 && this.companionUnlocked) {
       Object.keys(this.tutorial).forEach((key) => { (this.tutorial as Record<string, boolean>)[key] = true; });
       this.clues.push('clueAccounts');
       this.completionShown = true;
-      let resumeThird = false;
-      try { resumeThird = localStorage.getItem('under-shadow-current-chapter') === '3'; } catch { /* Use current chapter. */ }
       this.enterActTwo();
-      if (resumeThird) this.enterThirdAct();
+      if (savedChapter >= 3 && this.ownsSpirit('baize')) this.enterThirdAct();
+      for (const act of [4, 5, 6] as const) {
+        if (savedChapter < act || this.chapter !== act - 1 || !this.ownsSpirit(spirits[act - 2].id)) break;
+        this.enterLateAct(act, false);
+      }
+      this.helpUses = savedHelpUses;
+      this.updateObjectives(true);
     }
     this.cameras.main.setBounds(0, 0, DISTRICT_WIDTH, DISTRICT_HEIGHT);
     this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
@@ -429,6 +483,9 @@ export class WorldScene extends Phaser.Scene {
     this.checkpointReady = true;
     this.saveWorldCheckpoint();
     if (this.chapter === 1 && this.companionUnlocked) this.showChapterAchievement('next');
+    else if (this.chapter === 2 && isActTwoComplete(this.secondAct)) this.showSecondActConclusion(this.secondAct.rewardClaimed);
+    else if (this.chapter === 3 && thirdActComplete(this.thirdSteps)) this.showThirdActConclusion(this.thirdReward);
+    else if (this.chapter >= 4 && isLateActComplete(this.lateProgress[this.chapter as LateActNumber], lateActs[this.chapter as LateActNumber].steps)) this.showLateActConclusion(this.lateProgress[this.chapter as LateActNumber].rewardClaimed);
   }
 
   update(_: number, delta: number): void {
@@ -444,6 +501,10 @@ export class WorldScene extends Phaser.Scene {
     this.syncGameUi();
     if (!this.transitioning && !this.dialogueLayer && !this.companionLayer && !this.mapLayerUi && !this.notebookLayer && !this.helpLayer && !this.chapterLayer) this.movePlayer(delta);
     else if (this.walking) { this.walking = false; this.syncPlayerPose(); }
+    if (this.pointerAim && !this.dialogueLayer && !this.companionLayer && !this.chapterLayer && !this.helpLayer && !this.notebookLayer && !this.mapLayerUi) {
+      const aim = this.cameras.main.getWorldPoint(this.pointerAim.x, this.pointerAim.y);
+      if (Math.hypot(aim.x - this.player.x, aim.y - this.player.y) > 28) this.setFacing(this.facingFor(aim.x - this.player.x, aim.y - this.player.y));
+    }
     if (this.pendingInteraction && Phaser.Math.Distance.Between(this.player.x, this.player.y, this.pendingInteraction.x, this.pendingInteraction.y) <= INTERACT_RADIUS) {
       this.pendingInteraction = null;
       this.showToast(t('arrivedInteract'));
@@ -457,6 +518,12 @@ export class WorldScene extends Phaser.Scene {
     this.updateAlerts();
     this.updateObjectives();
     this.drawMiniMap();
+    // Keep the original top-right map, but reveal the actor/waystone when the
+    // original world edge puts them behind that HUD. M remains available.
+    const screenX = this.player.x - this.cameras.main.scrollX, screenY = this.player.y - this.cameras.main.scrollY;
+    const behindMini = screenX > WIDTH - 360 && screenY < 510;
+    for (const object of this.miniHudObjects) (object as Phaser.GameObjects.Image).setAlpha(behindMini ? .08 : 1);
+    for (const object of this.objectiveHudObjects) (object as Phaser.GameObjects.Image).setAlpha(screenX < 525 && screenY < 535 ? .08 : 1);
   }
 
   private updateLanternLight(): void {
@@ -543,7 +610,7 @@ export class WorldScene extends Phaser.Scene {
   private addInteraction(item: WorldInteraction): void {
     const marker = this.add.container(item.x, item.y).setDepth(getFeetDepth(item.y));
     this.areaActors.push(marker);
-    const characterHeight = item.id === 'case-file' ? 57 : item.id === 'mentor' ? 148 : NPC_DISPLAY_SIZE;
+    const characterHeight = item.id === 'case-file' ? 57 : NPC_DISPLAY_SIZE;
     if (item.id === 'case-file') {
       marker.add([
         this.add.ellipse(0, 12, 48, 16, 0x10171a, 0.36),
@@ -554,7 +621,7 @@ export class WorldScene extends Phaser.Scene {
       ]);
     } else {
       const sprite = item.id === 'mentor'
-        ? this.add.image(0, 0, 'rong-jie-world').setDisplaySize(100, 148).setOrigin(0.5, 1)
+        ? this.add.image(0, 0, 'rong-jie-world').setDisplaySize(119, NPC_DISPLAY_SIZE).setOrigin(0.5, 1)
         : this.add.image(0, 0, 'npc-atlas', item.atlasCell).setDisplaySize(NPC_DISPLAY_SIZE, NPC_DISPLAY_SIZE).setOrigin(0.5, 1);
       marker.add([this.add.ellipse(0, 9, 42, 13, 0x10171a, 0.42), sprite]);
     }
@@ -637,13 +704,14 @@ export class WorldScene extends Phaser.Scene {
     this.currentAreaText = localizedText(this, WIDTH / 2, 26, '', { fontSize: '19px', color: '#f5d987', backgroundColor: '#102631dd', padding: { x: 20, y: 9 } }).setOrigin(0.5, 0).setScrollFactor(0).setDepth(72);
     const miniBg = this.add.rectangle(WIDTH - 18, 18, 270, 206, 0x0d1d28, 0.94).setOrigin(1, 0).setStrokeStyle(2, 0x9b8455).setScrollFactor(0).setDepth(70);
     const miniImage = this.add.image(WIDTH - 28, 52, 'world-overview').setDisplaySize(248, 146).setOrigin(1, 0).setScrollFactor(0).setDepth(71);
-    localizedText(this, WIDTH - 40, 28, t('mapLabel'), { fontSize: '15px', color: '#f1d17b', fontStyle: 'bold' }).setOrigin(1, 0).setScrollFactor(0).setDepth(72);
+    const miniLabel = localizedText(this, WIDTH - 40, 28, t('mapLabel'), { fontSize: '15px', color: '#f1d17b', fontStyle: 'bold' }).setOrigin(1, 0).setScrollFactor(0).setDepth(72);
     this.miniGraphics = this.add.graphics().setScrollFactor(0).setDepth(73);
-    localizedText(this, WIDTH - 40, 201, t('mapExpand'), { fontSize: '12px', color: '#c6d8ce' }).setOrigin(1, 0).setScrollFactor(0).setDepth(72);
+    const miniExpand = localizedText(this, WIDTH - 40, 201, t('mapExpand'), { fontSize: '12px', color: '#c6d8ce' }).setOrigin(1, 0).setScrollFactor(0).setDepth(72);
     this.portalGuide = localizedText(this, WIDTH - 282, 237, '', {
       fontSize: '14px', color: '#f5e4bd', backgroundColor: '#102631ee',
       padding: { x: 11, y: 10 }, lineSpacing: 7,
     }).setScrollFactor(0).setDepth(72);
+    this.miniHudObjects = [miniBg, miniImage, miniLabel, miniExpand, this.miniGraphics, this.portalGuide];
     const controls = localizedText(this, WIDTH / 2, HEIGHT - 30, `${t('moveHint')}     ${t('interactHint')}     ${t('notebookHint')}`, {
       fontSize: '15px', color: '#f7e7c1', backgroundColor: '#102631dd', padding: { x: 18, y: 9 },
     }).setOrigin(0.5, 1).setScrollFactor(0).setDepth(70);
@@ -653,18 +721,26 @@ export class WorldScene extends Phaser.Scene {
       helpButton.lineStyle(2, 0xe7c36d, 1).strokeRoundedRect(42, 294, 206, 48, 12);
       localizedText(this, 64, 317, '✦', { fontSize: '24px', color: '#ffdc79' }).setOrigin(0.5).setScrollFactor(0).setDepth(76);
       localizedText(this, 151, 317, t('helpButton'), { fontSize: '17px', color: '#fff0cf', fontStyle: 'bold' }).setOrigin(0.5).setScrollFactor(0).setDepth(76);
+      this.add.rectangle(1440, 850, 240, 48, 0x183540, .98).setStrokeStyle(2, 0xe7c36d).setScrollFactor(0).setDepth(75);
+      localizedText(this, 1440, 850, '精靈檔案 · P', { fontSize: '18px', color: '#fff0cf', fontStyle: 'bold' }).setOrigin(.5).setScrollFactor(0).setDepth(76);
     }
     void miniBg; void controls;
+    this.objectiveHudObjects = this.children.list.filter(item => {
+      const display = item as Phaser.GameObjects.Image;
+      return display.depth >= 70 && display.depth <= 76 && display.x < 470 && !this.miniHudObjects.includes(item);
+    });
     this.updateObjectives(true);
   }
 
   private createDialogueControls(): void {
+    this.input.keyboard?.on('keydown-P', () => this.companionLayer ? this.closeCompanionPanel() : this.openCompanionRoster());
     this.mapToggle = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.M);
     this.notebookToggle = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.L);
     this.interactKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
     this.escKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.ESC);
     this.eKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.E);
     this.helpKey = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.H);
+    for (const key of [this.mapToggle, this.notebookToggle, this.interactKey, this.escKey, this.eKey, this.helpKey]) key.on('down', () => this.queuedKeys.add(key));
   }
 
   private createInput(): void {
@@ -672,6 +748,7 @@ export class WorldScene extends Phaser.Scene {
     keys?.addKeys('W,A,S,D');
     this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
       if (this.dialogueLayer || this.mapLayerUi || this.notebookLayer || pointer.wasTouch) return;
+      this.pointerAim = { x: pointer.x, y: pointer.y };
       const angleX = pointer.worldX - this.player.x;
       const angleY = pointer.worldY - this.player.y;
       if (Math.hypot(angleX, angleY) > 28) this.setFacing(this.facingFor(angleX, angleY));
@@ -679,13 +756,17 @@ export class WorldScene extends Phaser.Scene {
     this.game.canvas.addEventListener('pointerup', this.onCanvasPointerUp, true);
     this.game.canvas.addEventListener('pointerdown', this.onCanvasPointerDown, true);
     this.game.canvas.addEventListener('wheel', this.onCanvasWheel, { passive: false });
+    this.game.canvas.addEventListener('pointerleave', this.clearPointerAim);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       this.game.canvas.removeEventListener('pointerup', this.onCanvasPointerUp, true);
       this.game.canvas.removeEventListener('pointerdown', this.onCanvasPointerDown, true);
       this.game.canvas.removeEventListener('wheel', this.onCanvasWheel);
+      this.game.canvas.removeEventListener('pointerleave', this.clearPointerAim);
     });
     void keys;
   }
+
+  private clearPointerAim = (): void => { this.pointerAim = null; };
 
   private onCanvasPointerUp = (event: PointerEvent): void => {
     if (event.pointerType === 'mouse' && event.button !== 0) return;
@@ -700,7 +781,10 @@ export class WorldScene extends Phaser.Scene {
     if (this.mapLayerUi) { this.handleMapPointer(x, y); return; }
     if (this.notebookLayer) { this.handleNotebookPointer(x, y); return; }
     if (this.transitioning) return;
-    if (x >= 24 && x <= 464 && y >= 24 && y <= (this.touchLayout ? 184 : 300)) {
+    const point = this.cameras.main.getWorldPoint(x, y);
+    if (!this.touchLayout && hitsButton(x, y, 1440, 850, 240, 48)) { this.openCompanionRoster(); return; }
+    const objectiveHudVisible = !this.objectiveHudObjects.length || (this.objectiveHudObjects[0] as Phaser.GameObjects.Image).alpha > .5;
+    if (objectiveHudVisible && x >= 24 && x <= 464 && y >= 24 && y <= (this.touchLayout ? 184 : 300)) {
       if (!this.touchLayout) {
         const swipe = this.objectivePointerStartY === null ? 0 : y - this.objectivePointerStartY;
         if (Math.abs(swipe) > 28) this.scrollObjectives(swipe < 0 ? 2 : -2);
@@ -711,11 +795,23 @@ export class WorldScene extends Phaser.Scene {
       return;
     }
     this.objectivePointerStartY = null;
-    if (!this.touchLayout && x >= 42 && x <= 246 && y >= 286 && y <= 344) { this.toggleHelp(); return; }
-    if (x >= WIDTH - 280 && y <= 225) { this.toggleMap(); return; }
+    if (objectiveHudVisible && !this.touchLayout && x >= 42 && x <= 246 && y >= 286 && y <= 344) { this.toggleHelp(); return; }
+    if (x >= WIDTH - 280 && y <= 225 && this.miniGraphics.alpha > .5) { this.toggleMap(); return; }
 
-    const point = this.cameras.main.getWorldPoint(x, y);
-    const pets: Array<[AvailableSpirit, Phaser.GameObjects.Sprite | null | undefined]> = [['baize', this.baizeFollower], ['pixiu', this.pixiuFollower]];
+    const directActor = worldInteractions.find(npc => npc.region === this.area && Math.abs(point.x - npc.x) <= (npc.id === 'case-file' ? 35 : 55) && point.y >= npc.y - (npc.id === 'case-file' ? 72 : NPC_DISPLAY_SIZE) && point.y <= npc.y + 12);
+    if (directActor) { this.activateInteraction(directActor); return; }
+    const directPortal = districtMaps[this.area].portals.find(p => point.x >= p.x - 30 && point.x <= p.x + p.width + 30 && point.y >= p.y - 45 && point.y <= p.y + p.height + 45);
+    if (directPortal) {
+      if (!this.portalUnlocked(directPortal)) { this.showToast(this.lockMessage(directPortal)); return; }
+      const px = directPortal.x + directPortal.width / 2, py = directPortal.y + directPortal.height / 2;
+      if (Math.hypot(this.player.x - px, this.player.y - py) < 145) this.enterPortal(directPortal);
+      else { this.pendingInteraction = null; this.navigateNear(px, py, 84); }
+      return;
+    }
+
+    // Waystones have priority over pets that follow onto them. P / the roster
+    // always provides access to each companion independently of world overlap.
+    const pets: Array<[AvailableSpirit, Phaser.GameObjects.Sprite | null | undefined]> = [['baize', this.baizeFollower], ['pixiu', this.pixiuFollower], ...this.lateFollowers];
     for (const [id, pet] of pets) if (pet && Math.abs(point.x - pet.x) < 50 && point.y >= pet.y - 120 && point.y < pet.y + 18) { this.selectedSpirit = id; this.openCompanionPanel(); return; }
     if (this.companionUnlocked && this.companion && Math.abs(point.x - this.companion.x) < 70 && point.y >= this.companion.y - 112 && point.y <= this.companion.y + 24) {
       this.selectedSpirit = 'xiezhi'; this.openCompanionPanel(); return;
@@ -773,23 +869,28 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private handleKeys(): void {
-    if (this.companionLayer) { if (Phaser.Input.Keyboard.JustDown(this.escKey)) this.closeCompanionPanel(); return; }
+    const pressed = new Set([this.mapToggle, this.notebookToggle, this.interactKey, this.escKey, this.eKey, this.helpKey].filter(key => {
+      const queued = this.queuedKeys.delete(key);
+      return Phaser.Input.Keyboard.JustDown(key) || queued;
+    }));
+    const justDown = (key: Phaser.Input.Keyboard.Key) => pressed.has(key);
+    if (this.companionLayer) { if (justDown(this.escKey)) this.closeCompanionPanel(); return; }
     if (this.chapterLayer) {
-      if (Phaser.Input.Keyboard.JustDown(this.interactKey) || Phaser.Input.Keyboard.JustDown(this.eKey) || Phaser.Input.Keyboard.JustDown(this.escKey)) {
-        if (this.chapter >= 2) this.handleChapterPointer(800, 720);
+      if (justDown(this.interactKey) || justDown(this.eKey) || justDown(this.escKey)) {
+        if (this.chapter >= 2) this.handleChapterPointer(800, this.chapter >= 4 ? 760 : 720);
         else if (this.chapterPage === 'law') this.claimCompanionAndShowNext(); else this.enterActTwo();
       }
       return;
     }
     if (this.helpLayer) {
-      if (Phaser.Input.Keyboard.JustDown(this.escKey)) this.toggleHelp();
+      if (justDown(this.escKey)) this.toggleHelp();
       return;
     }
-    if (Phaser.Input.Keyboard.JustDown(this.mapToggle)) this.toggleMap();
-    if (Phaser.Input.Keyboard.JustDown(this.notebookToggle)) this.toggleNotebook();
-    if (Phaser.Input.Keyboard.JustDown(this.helpKey)) this.toggleHelp();
-    if (Phaser.Input.Keyboard.JustDown(this.escKey)) this.closePanels();
-    if (Phaser.Input.Keyboard.JustDown(this.interactKey) || Phaser.Input.Keyboard.JustDown(this.eKey)) {
+    if (justDown(this.mapToggle)) this.toggleMap();
+    if (justDown(this.notebookToggle)) this.toggleNotebook();
+    if (justDown(this.helpKey)) this.toggleHelp();
+    if (justDown(this.escKey)) this.closePanels();
+    if (justDown(this.interactKey) || justDown(this.eKey)) {
       if (this.dialogueLayer) this.confirmDialogue();
       else if (this.nearbyInteraction) this.openDialogue(this.nearbyInteraction);
       else if (this.nearbyPortal) this.enterPortal(this.nearbyPortal);
@@ -890,7 +991,7 @@ export class WorldScene extends Phaser.Scene {
     }
     const col = ({ front: 0, left: 1, right: 2, back: 3 } as const)[this.facing];
     const row = this.walking
-      ? (Math.floor(this.gaitDistance / 48) % 2) + 1
+      ? getVerticalWalkRow(this.gaitDistance)
       : (Math.floor(this.time.now / 220) % 19 === 0 ? 3 : 0);
     this.actorSprite.setTexture('player-walk-cycle', row * 4 + col).setFlipX(false)
       .setDisplaySize(PLAYER_DISPLAY_WIDTH[this.facing], PLAYER_DISPLAY_HEIGHT).setY(0).setAngle(0);
@@ -917,12 +1018,16 @@ export class WorldScene extends Phaser.Scene {
 
   private updateAlerts(): void {
     for (const item of worldInteractions.filter((candidate) => candidate.region === this.area)) {
-      const active = !this.visited.has(item.id) && Phaser.Math.Distance.Between(this.player.x, this.player.y, item.x, item.y) < 175;
+      const active = (this.objectiveTarget === item.id || !this.visited.has(item.id)) && Phaser.Math.Distance.Between(this.player.x, this.player.y, item.x, item.y) < 175;
       this.alerts.get(item.id)?.setVisible(active);
     }
   }
 
   private objectives(): Objective[] {
+    if (this.chapter >= 4) {
+      const act = this.chapter as LateActNumber;
+      return lateActs[act].steps.map(step => ({ key: 'objectiveFile', title: step.title, target: step.npcId, complete: this.lateProgress[act].completed.includes(step.id) }));
+    }
     if (this.chapter === 3) return thirdActSteps.map(step => ({ key: 'objectiveFile', title: step.title, target: step.id, complete: this.thirdSteps.includes(step.id) }));
     if (this.chapter === 2) return [
       { key: 'objectiveCampus', complete: this.secondAct.completed.includes('ledger'), target: 'treasurer' },
@@ -959,10 +1064,10 @@ export class WorldScene extends Phaser.Scene {
 
   private updateObjectives(force = false): void {
     const list = this.objectives();
-    const signature = list.map((item) => `${item.key}:${item.complete}`).join('|');
+    const signature = list.map((item, i) => `${i}:${item.key}:${item.complete}`).join('|');
     const changed = signature !== this.objectiveSignature;
     if (!force && !changed) return;
-    const newlyCompleted = this.objectiveSignature ? list.find((item) => item.complete && this.objectiveSignature.includes(`${item.key}:false`)) : undefined;
+    const newlyCompleted = this.objectiveSignature ? list.find((item, i) => item.complete && this.objectiveSignature.includes(`${i}:${item.key}:false`)) : undefined;
     if (changed && this.objectiveSignature && !this.touchLayout) {
       const focus = list.findIndex((item) => !item.complete);
       if (focus >= this.objectiveScroll + this.objectiveRows.length) this.objectiveScroll = focus - this.objectiveRows.length + 1;
@@ -1006,6 +1111,7 @@ export class WorldScene extends Phaser.Scene {
 
   private openDialogue(item: WorldInteraction): void {
     if (this.dialogueLayer || this.mapLayerUi || this.notebookLayer) return;
+    this.stopNavigation();
     this.clearSemiAutoArrow();
     this.activeInteraction = item;
     this.responseMode = false;
@@ -1017,6 +1123,7 @@ export class WorldScene extends Phaser.Scene {
     this.updateObjectives(true);
     this.dialogueLayer = this.add.container(0, 0).setScrollFactor(0).setDepth(100);
     this.dialogueLayer.add(this.add.rectangle(WIDTH / 2, HEIGHT / 2, WIDTH, HEIGHT, 0x071019, 0.48).setInteractive());
+    if (this.chapter >= 4) { this.drawLateDialogue(item); return; }
     const step = this.chapter === 2 ? this.secondActStepFor(item.id) : undefined;
     this.drawDialogue(item, this.chapter === 3 ? thirdActSteps.find(s => s.id === item.id)?.story ?? t(item.intro) : step ? this.secondActStory(step) : t(item.intro), item.choices);
   }
@@ -1024,6 +1131,7 @@ export class WorldScene extends Phaser.Scene {
   private drawDialogue(item: WorldInteraction, body: string, choices: InteractionChoice[] | null): void {
     const layer = this.dialogueLayer;
     if (!layer) return;
+    this.activeDialogueActions = choices?.map(choice => () => this.chooseDialogue(item, choice)) ?? [];
     const touch = this.touchLayout;
     const buttonY = touch ? 780 : 828;
     layer.removeAll(true);
@@ -1034,7 +1142,7 @@ export class WorldScene extends Phaser.Scene {
       ? this.add.image(250, touch ? 820 : 850, 'protagonist-expressions', { neutral: 0, warm: 2, concerned: 1 }[this.dialogueEmotion]).setDisplaySize(286, 286).setOrigin(0.5, 1)
       : item.id === 'mentor'
         ? this.add.image(250, touch ? 820 : 850, 'rong-jie-expressions', { neutral: 0, warm: 1, concerned: 2 }[this.dialogueEmotion]).setDisplaySize(286, 286).setOrigin(0.5, 1)
-        : this.add.image(250, touch ? 820 : 850, 'npc-atlas', item.atlasCell).setDisplaySize(286, 286).setOrigin(0.5, 1);
+        : this.add.image(250, touch ? 820 : 850, 'npc-atlas', `bust-${item.atlasCell}`).setDisplaySize(286, 294).setOrigin(0.5, 1);
     if (this.dialogueEmotion === 'concerned' && item.id !== 'mentor' && !this.responseMode) portrait.setTint(0xd3e1e3);
     if (this.dialogueEmotion === 'warm' && item.id !== 'mentor' && !this.responseMode) portrait.setTint(0xffebcc);
     layer.add(portrait);
@@ -1073,11 +1181,11 @@ export class WorldScene extends Phaser.Scene {
     }
     const item = this.activeInteraction;
     if (!item) return;
-    const choices = item.choices;
-    const buttonWidth = choices.length === 1 ? 300 : 390;
-    const startX = choices.length === 1 ? 1020 : 820;
-    const index = choices.findIndex((_, i) => Math.abs(x - (startX + i * (buttonWidth + 30))) <= buttonWidth / 2);
-    if (index >= 0) this.chooseDialogue(item, choices[index]);
+    const actions = this.activeDialogueActions;
+    const buttonWidth = actions.length === 1 ? 300 : 390;
+    const startX = actions.length === 1 ? 1020 : 820;
+    const index = actions.findIndex((_, i) => Math.abs(x - (startX + i * (buttonWidth + 30))) <= buttonWidth / 2);
+    if (index >= 0) actions[index]();
   }
 
   private chooseDialogue(item: WorldInteraction, choice: InteractionChoice): void {
@@ -1133,6 +1241,11 @@ export class WorldScene extends Phaser.Scene {
     this.dialogueLayer = null;
     this.activeInteraction = null;
     this.responseMode = false;
+    this.activeDialogueActions = [];
+    if (this.chapter >= 4) {
+      const act = this.chapter as LateActNumber;
+      if (isLateActComplete(this.lateProgress[act], lateActs[act].steps) && !this.lateProgress[act].rewardClaimed) this.showLateActConclusion(false);
+    }
     if (this.chapter === 3 && thirdActComplete(this.thirdSteps) && !this.thirdReward) this.showThirdActConclusion(false);
     if (this.chapter === 2 && isActTwoComplete(this.secondAct) && !this.secondActConcluded) {
       this.secondActConcluded = true;
@@ -1154,9 +1267,8 @@ export class WorldScene extends Phaser.Scene {
   private confirmDialogue(): void {
     if (!this.dialogueLayer) return;
     if (this.responseMode) { this.advanceDialogue(); return; }
-    const item = this.activeInteraction;
-    const firstChoice = item?.choices[0];
-    if (item && firstChoice) this.chooseDialogue(item, firstChoice);
+    const firstAction = this.activeDialogueActions[0];
+    if (firstAction) firstAction();
     else this.advanceDialogue();
   }
 
@@ -1230,21 +1342,43 @@ export class WorldScene extends Phaser.Scene {
     if (this.dialogueLayer || this.mapLayerUi) return;
     this.tutorial.notebook = true;
     this.updateObjectives(true);
+    this.notebookPage = 0;
+    this.renderNotebook();
+  }
+
+  private notebookRecords(): string[] {
+    if (this.chapter >= 4) {
+      const act = this.chapter as LateActNumber;
+      return lateActs[act].steps.filter(step => this.lateProgress[act].completed.includes(step.id)).map(step => step.title + '\n' + this.lateProgress[act].evidence[step.id]);
+    }
+    return this.chapter === 3 ? thirdActSteps.filter(step => this.thirdSteps.includes(step.id)).map(step => step.title + '\n' + step.evidence) : this.chapter === 2 ? this.secondAct.completed.map(step => this.secondActStory(step)) : this.clues.map(clue => t(clue));
+  }
+
+  private renderNotebook(): void {
+    this.notebookLayer?.destroy(true);
     const layer = this.add.container(0, 0).setScrollFactor(0).setDepth(95);
     this.notebookLayer = layer;
     layer.add(this.add.rectangle(WIDTH / 2, HEIGHT / 2, WIDTH, HEIGHT, 0x071019, 0.62).setInteractive());
     layer.add(this.add.rectangle(WIDTH / 2, HEIGHT / 2, 820, 650, 0xeadfbe, 0.99).setStrokeStyle(4, 0x38525b));
     layer.add(this.add.rectangle(WIDTH / 2, 180, 820, 70, 0x244551));
     layer.add(localizedText(this, WIDTH / 2, 180, t('clueBook'), { fontSize: '27px', color: '#fff0cf', fontStyle: 'bold' }).setOrigin(0.5));
-    const records = this.chapter === 3 ? thirdActSteps.filter(step => this.thirdSteps.includes(step.id)).map(step => step.evidence) : this.chapter === 2 ? this.secondAct.completed.map(step => this.secondActStory(step)) : this.clues.map(clue => t(clue));
-    const body = records.length ? records.map((line, index) => (index + 1) + '  ' + line).join('\n\n') : t('noClues');
+    const records = this.notebookRecords();
+    this.notebookPage = Math.max(0, Math.min(this.notebookPage, records.length - 1));
+    const body = records[this.notebookPage] || t('noClues');
     layer.add(localizedText(this, 440, 240, wrapCjkText(body, this.touchLayout ? 24 : 36), { fontSize: this.touchLayout ? '27px' : '21px', color: '#233b43', wordWrap: { width: 720 }, lineSpacing: 12 }));
-    this.addButton(layer, WIDTH / 2, 720, 270, t('notebookClose'), () => this.closeNotebook(), true);
+    layer.add(localizedText(this, 800, 590, `${records.length ? this.notebookPage + 1 : 0} / ${records.length} · 每項線索獨立保存`, { fontSize: '18px', color: '#38525b' }).setOrigin(.5));
+    if (this.notebookPage > 0) this.addButton(layer, 600, 645, 230, '上一項', () => this.turnNotebook(-1), true);
+    if (this.notebookPage < records.length - 1) this.addButton(layer, 1000, 645, 230, '下一項', () => this.turnNotebook(1), true);
+    this.addButton(layer, WIDTH / 2, 740, 270, t('notebookClose'), () => this.closeNotebook(), true);
   }
 
   private handleNotebookPointer(x: number, y: number): void {
-    if (hitsButton(x, y, WIDTH / 2, 720, 270, this.touchLayout ? 88 : 54)) this.closeNotebook();
+    if (hitsButton(x, y, WIDTH / 2, 740, 270, this.touchLayout ? 88 : 54)) this.closeNotebook();
+    else if (hitsButton(x, y, 600, 645, 230, this.touchLayout ? 88 : 54)) this.turnNotebook(-1);
+    else if (hitsButton(x, y, 1000, 645, 230, this.touchLayout ? 88 : 54)) this.turnNotebook(1);
   }
+
+  private turnNotebook(delta: number): void { this.notebookPage += delta; this.renderNotebook(); }
 
   private closeNotebook(): void {
     this.notebookLayer?.destroy(true);
@@ -1436,11 +1570,13 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private showChapterAchievement(page: 'law' | 'next' = 'law'): void {
+    this.clearToasts();
     this.chapterPage = page;
     const layer = this.add.container(0, 0).setScrollFactor(0).setDepth(110);
     this.chapterLayer = layer;
     layer.add(this.add.rectangle(WIDTH / 2, HEIGHT / 2, WIDTH, HEIGHT, 0x071019, 0.78));
     layer.add(this.add.rectangle(WIDTH / 2, HEIGHT / 2, 930, 790, 0x102631, 0.99).setStrokeStyle(4, 0xe4c36d));
+    this.addLawSourceButton(layer);
     layer.add(this.add.circle(WIDTH / 2, 178, 42, 0xf0c75e, 1).setStrokeStyle(4, 0xffe8a3));
     layer.add(localizedText(this, WIDTH / 2, 178, '★', { fontSize: '43px', color: '#25343a', fontStyle: 'bold' }).setOrigin(0.5));
     layer.add(localizedText(this, WIDTH / 2, 252, t('achievementKicker'), { fontSize: '17px', color: '#e7c36d', letterSpacing: 3 }).setOrigin(0.5));
@@ -1448,8 +1584,8 @@ export class WorldScene extends Phaser.Scene {
     layer.add(localizedText(this, WIDTH / 2, 348, t('achievementBody'), { fontSize: '19px', color: '#d8e4dc' }).setOrigin(0.5));
     if (page === 'law') {
       layer.add(this.add.rectangle(WIDTH / 2, 475, 800, 188, 0x172f3b).setStrokeStyle(2, 0x8e9f7b));
-      layer.add(localizedText(this, 440, 390, t('lawTitle'), { fontSize: '18px', color: '#e7c36d', fontStyle: 'bold' }));
-      layer.add(localizedText(this, 440, 423, wrapCjkText(t('lawBody'), 48), { fontSize: '16px', color: '#d8e4dc', lineSpacing: 7 }));
+      layer.add(localizedText(this, 440, 390, '法規學習 · 澳門背景', { fontSize: '18px', color: '#e7c36d', fontStyle: 'bold' }));
+      layer.add(localizedText(this, 440, 423, wrapCjkText(legalLearning[1].summary + '\n' + legalLearning[1].note, 48), { fontSize: '16px', color: '#d8e4dc', lineSpacing: 7 }));
       layer.add(this.add.rectangle(WIDTH / 2, 666, 800, 145, 0x1b3a43).setStrokeStyle(2, 0xe4c36d));
       layer.add(this.add.image(515, 729, 'xiezhi-guardian').setDisplaySize(135, 135).setOrigin(0.5, 1));
       layer.add(localizedText(this, 625, 612, t('companionGift'), { fontSize: '18px', color: '#e7c36d', fontStyle: 'bold' }));
@@ -1466,10 +1602,17 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private handleChapterPointer(x: number, y: number): void {
+    if (hitsButton(x, y, 1420, 55, 280, this.touchLayout ? 88 : 54)) {
+      window.open(legalLearning[this.chapter].url, '_blank', 'noopener,noreferrer'); return;
+    }
+    if (this.chapter >= 4) {
+      if (!hitsButton(x, y, 800, 760, 520, this.touchLayout ? 88 : 54)) return;
+      this.advanceLateConclusion(); return;
+    }
     if (this.chapter === 3) {
       if (!hitsButton(x, y, 800, 720, 390, this.touchLayout ? 88 : 54)) return;
       if (!this.thirdReward) { this.thirdReward = true; this.saveThirdAct(); this.spawnPixiu(); this.showThirdActConclusion(true); }
-      else this.closeChapterAchievement();
+      else this.enterLateAct(4);
       return;
     }
     if (this.chapter === 2) {
@@ -1501,8 +1644,10 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private enterActTwo(): void {
+    this.stopNavigation();
     this.chapterLayer?.destroy(true); this.chapterLayer = null;
     this.chapter = 2;
+    this.helpUses = 0;
     this.selectedSpirit = 'xiezhi';
     this.populateArea(this.area);
     try {
@@ -1540,19 +1685,21 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private showSecondActConclusion(reward = false): void {
+    this.clearToasts();
     if (reward) this.spawnBaize();
     this.secondActRewardPage = reward;
     this.chapterLayer?.destroy(true);
     const layer = this.add.container(0, 0).setScrollFactor(0).setDepth(110);
     this.chapterLayer = layer;
     layer.add(this.add.rectangle(800, 450, 1600, 900, 0x071019, .9));
+    this.addLawSourceButton(layer);
     layer.add(localizedText(this, 800, 220, reward ? '白澤 · 求證核實之靈' : '第二幕完成 · 證據需要互相印證', { fontSize: '32px', color: '#ffe0a0' }).setOrigin(.5));
     if (reward) {
       const art = this.add.image(800, 430, 'world-baize-reward').setDisplaySize(840, 280).setAlpha(0);
       layer.add(art);
       this.tweens.add({ targets: art, alpha: 1, y: 410, duration: 1200 });
       layer.add(localizedText(this, 800, 615, '白澤提醒你：準確的證據，比匆忙的結論更有價值。', { fontSize: '23px', color: '#dcebe1' }).setOrigin(.5));
-    } else layer.add(localizedText(this, 800, 430, wrapCjkText('帳簿、物資簽收、會面與登記已逐項核對。請保全原始材料，交由主管繼續核實。涉及公共財產與職務侵佔時，須結合身份、金額、主觀目的及完整證據判斷；帳目異常本身不等於犯罪。', 36), { fontSize: '24px', color: '#dcebe1', lineSpacing: 12 }).setOrigin(.5));
+    } else layer.add(localizedText(this, 800, 430, wrapCjkText('帳簿、物資簽收、會面與登記已逐項核對。\n' + legalLearning[2].summary + '\n' + legalLearning[2].note, 36), { fontSize: '24px', color: '#dcebe1', lineSpacing: 12 }).setOrigin(.5));
     this.addButton(layer, 800, 720, 390, reward ? '帶白澤同行 · 開始第三幕' : '讀畢規則 · 領取白澤', () => {
       if (!reward) {
         this.secondAct.rewardClaimed = true;
@@ -1567,12 +1714,15 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private enterThirdAct(): void {
+    this.stopNavigation();
     this.closeChapterAchievement();
     this.chapter = 3;
+    this.helpUses = 0;
     try {
       localStorage.setItem('under-shadow-current-chapter', '3');
       const p = JSON.parse(localStorage.getItem('under-shadow-act-three-v1') || 'null');
-      if (p) { this.thirdSteps = thirdActSteps.filter(s => p.completed?.includes(s.id)).map(s => s.id); this.thirdReward = p.rewardClaimed === true && thirdActComplete(this.thirdSteps); }
+      const restored = restoreThirdActProgress(p);
+      this.thirdSteps = restored.completed; this.thirdReward = restored.rewardClaimed;
     } catch { /* Keep session progress. */ }
     this.chapterTitle?.setText('第三幕 · 禮包裡的名字');
     this.objectiveScroll = 0; this.objectiveSignature = '';
@@ -1588,16 +1738,164 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private showThirdActConclusion(reward: boolean): void {
+    this.clearToasts();
     this.chapterLayer?.destroy(true);
     const layer = this.add.container(0,0).setScrollFactor(0).setDepth(110); this.chapterLayer=layer;
     layer.add(this.add.rectangle(800,450,1600,900,0x071019,.95));
+    this.addLawSourceButton(layer);
     layer.add(localizedText(this,800,190,reward ? '貔貅 · 守住邊界之靈' : '第三幕完成 · 禮包裡的名字',{fontSize:'32px',color:'#ffe0a0'}).setOrigin(.5));
     if (reward) {
       const pet=this.add.image(800,450,'world-pixiu-young',0).setDisplaySize(240,320).setAlpha(0); layer.add(pet);
       this.tweens.add({targets:pet,alpha:1,y:430,duration:1100});
-      layer.add(localizedText(this, 800, 625, fourthActDraft.title + '（準備中）\n下一份檔案將核對報價、合同、工程量與付款流向。', { fontSize: '19px', color: '#c5d8ce', align: 'center' }).setOrigin(.5));
-    } else layer.add(localizedText(this,800,410,wrapCjkText('你保存了禮包來源、發票、收件記錄與審批往來。收禮與請託的關聯仍須由完整證據核實。學習重點：辨識職務便利、財物與不正當利益，不能把一般人情或單一時點直接當作犯罪結論。拒收後仍應依公平程序處理申請。',36),{fontSize:'23px',color:'#dcebe1',lineSpacing:12}).setOrigin(.5));
-    this.addButton(layer,800,720,390,reward ? '回到街區 · 投餵守界梨' : '讀畢規則 · 領取貔貅',()=>this.handleChapterPointer(800,720),true);
+      layer.add(localizedText(this, 800, 625, '接下來 · 第四幕《朋友價》\n核對報價、合同、工程量與付款流向。夥伴和背包繼續保留。', { fontSize: '19px', color: '#c5d8ce', align: 'center' }).setOrigin(.5));
+    } else layer.add(localizedText(this,800,410,wrapCjkText('你保存了來源、發票、收件與審批往來。\n' + legalLearning[3].summary + '\n' + legalLearning[3].note,36),{fontSize:'23px',color:'#dcebe1',lineSpacing:12}).setOrigin(.5));
+    this.addButton(layer,800,720,390,reward ? '帶貔貅同行 · 開始第四幕' : '讀畢規則 · 領取貔貅',()=>this.handleChapterPointer(800,720),true);
+  }
+
+  private saveLateProgress(): void {
+    try { localStorage.setItem(LATE_SAVE_KEY, JSON.stringify(this.lateProgress)); } catch { /* Keep in-memory progress. */ }
+    this.saveWorldCheckpoint();
+  }
+
+  private enterLateAct(act: LateActNumber, announce = true): void {
+    if (!this.ownsSpirit(spirits[act - 2].id)) return;
+    this.stopNavigation();
+    this.closeChapterAchievement();
+    this.clearSemiAutoArrow();
+    this.chapter = act;
+    this.objectiveScroll = 0; this.objectiveSignature = '';
+    this.helpUses = 0;
+    this.chapterTitle?.setText(`第${['', '一', '二', '三', '四', '五', '六'][act]}幕 · ${lateActs[act].title}`);
+    try { localStorage.setItem('under-shadow-current-chapter', String(act)); } catch { /* Session can continue. */ }
+    for (const chapter of [4, 5, 6] as const) if (this.lateProgress[chapter].rewardClaimed) this.spawnLateCompanion(lateActs[chapter].spirit);
+    this.populateArea(this.area); this.updateObjectives(true);
+    this.saveWorldCheckpoint();
+    if (announce) {
+      this.cameras.main.flash(380, 8, 18, 25);
+      this.showToast(`第${act}幕 · ${lateActs[act].title}：${lateActs[act].steps[0].title}。你仍在原地，請沿原路前往。`);
+      this.showActOpening(act);
+    }
+  }
+
+  private showActOpening(act: LateActNumber): void {
+    const mentor = worldInteractions.find(npc => npc.id === 'mentor')!;
+    this.activeInteraction = mentor;
+    this.dialogueLayer = this.add.container(0, 0).setScrollFactor(0).setDepth(100);
+    this.responseMode = true;
+    this.drawDialogue(mentor, lateActs[act].opening, null);
+  }
+
+  private stopNavigation(): void {
+    this.path = []; this.pathIndex = 0; this.pendingInteraction = null;
+    this.moveTarget.set(this.player.x, this.player.y);
+    this.walking = false;
+    this.syncPlayerPose();
+  }
+
+  private drawLateDialogue(item: WorldInteraction): void {
+    const act = this.chapter as LateActNumber;
+    const data = lateActs[act];
+    const progress = this.lateProgress[act];
+    const current = data.steps[progress.completed.length];
+    const step = current?.npcId === item.id ? current : [...data.steps].reverse().find(s => s.npcId === item.id && progress.completed.includes(s.id));
+    if (!step || step !== current) {
+      this.responseMode = true;
+      this.drawDialogue(item, step ? '【已歸檔】' + (progress.evidence[step.id] || step.choices[0].evidence) + (current ? '\n下一步：' + current.title : '\n本幕材料已齊，請完成結案覆核。') : current ? '這份材料需要先和前面的記錄核對。\n現在請前往：' + current.title + '。可按 M 看街區地圖，按 H 顯示引路。' : '本幕材料已齊。完成結案覆核後，可以繼續探索和投餵夥伴。', null);
+      return;
+    }
+    this.drawDialogue(item, step.intro, []);
+    this.activeDialogueActions = step.choices.map(choice => () => {
+      const next = completeLateStep(this.lateProgress[act], data.steps, item.id, choice.evidence);
+      if (next === this.lateProgress[act]) return;
+      this.lateProgress[act] = next;
+      this.saveLateProgress();
+      this.responseMode = true;
+      this.dialogueEmotion = 'warm';
+      this.updateObjectives(true);
+      const following = data.steps[next.completed.length];
+      this.drawDialogue(item, choice.reply + '\n【已保存線索】' + (following ? '\n下一步：' + following.title : '\n材料已齊，結束交談後進行覆核。'), null);
+      this.showToast(`已歸檔 ${next.completed.length}/${data.steps.length} · ${step.title}`);
+    });
+    step.choices.forEach((choice, i) => this.addButton(this.dialogueLayer!, 820 + i * 420, this.touchLayout ? 780 : 828, 390, choice.label, this.activeDialogueActions[i], true));
+  }
+
+  private spawnLateCompanion(id: SpiritId): void {
+    if (!this.ownsSpirit(id) || this.lateFollowers.has(id)) return;
+    const stage = getCompanionGrowthStage(this.spiritProgress[id].fed);
+    const pet = this.add.sprite(this.player.x + 90, this.player.y + 45, `world-${id}-${stage.id}`, 0)
+      .setOrigin(.5, 1).setDisplaySize(stage.size, stage.size * 724 / 543).setAlpha(0);
+    this.lateFollowers.set(id, pet);
+    this.tweens.add({ targets: pet, alpha: 1, duration: 900 });
+  }
+
+  private showLateActConclusion(reward: boolean): void {
+    this.clearToasts();
+    const act = this.chapter as LateActNumber;
+    const data = lateActs[act];
+    this.lateConclusionPage = reward ? 'reward' : 'rules';
+    this.chapterLayer?.destroy(true);
+    const layer = this.add.container(0, 0).setScrollFactor(0).setDepth(110); this.chapterLayer = layer;
+    layer.add(this.add.rectangle(800, 450, 1600, 900, 0x071019, .95));
+    layer.add(this.add.rectangle(800, 450, 1150, 780, 0x102631, .99).setStrokeStyle(3, 0xe9c66f));
+    this.addLawSourceButton(layer);
+    layer.add(localizedText(this, 800, 128, `檔案 ${act}/6 · ${reward ? '同行之約' : '調查完成'}`, { fontSize: '20px', color: '#e9c66f' }).setOrigin(.5));
+    layer.add(localizedText(this, 800, 185, reward ? `${spiritNames[data.spirit]} · ${getSpirit(data.spirit).virtue.hant}` : `第${act}幕 · ${data.title}`, { fontSize: '34px', color: '#fff0cf', fontStyle: 'bold' }).setOrigin(.5));
+    if (!reward) {
+      layer.add(localizedText(this, 800, 244, '先讀規則與處理方向，再領取本幕精靈', { fontSize: '19px', color: '#b8d2c8' }).setOrigin(.5));
+      const body = [legalLearning[act].summary, ...data.rules.slice(1)].map((rule, i) => `${i + 1}. ${rule}`).join('\n\n');
+      layer.add(localizedText(this, 315, 295, wrapCjkText(body, 46), { fontSize: '21px', color: '#e6e8dc', lineSpacing: 8, wordWrap: { width: 970 } }));
+    } else {
+      const art = this.add.image(800, 470, `world-${data.spirit}-young`, 0).setOrigin(.5, 1).setDisplaySize(200, 200 * 724 / 543).setAlpha(0);
+      const halo = this.add.circle(800, 355, 130, 0xf4d58b, .1).setBlendMode(Phaser.BlendModes.ADD);
+      layer.add([halo, art]);
+      this.tweens.add({ targets: art, alpha: 1, y: 455, duration: 900, ease: 'Sine.Out' });
+      this.tweens.add({ targets: halo, scale: 1.12, alpha: .25, yoyo: true, duration: 900, repeat: 1 });
+      layer.add(localizedText(this, 800, 505, wrapCjkText(data.closing, 48), { fontSize: '21px', color: '#dcebe1', lineSpacing: 8, align: 'center' }).setOrigin(.5, 0));
+      layer.add(localizedText(this, 800, 675, `專屬${fruitNames[data.spirit]} · 答題收集六顆，投餵3次成長、6次守護`, { fontSize: '19px', color: '#e9c66f' }).setOrigin(.5));
+    }
+    const next = act < 6 ? lateActs[(act + 1) as LateActNumber] : undefined;
+    const label = !reward ? `讀畢規則 · 領取${spiritNames[data.spirit]}` : next ? `下一幕 · ${next.title}` : '六靈集結 · 開啟終局檔案';
+    this.addButton(layer, 800, 760, 520, label, () => this.advanceLateConclusion(), true);
+  }
+
+  private advanceLateConclusion(): void {
+    const act = this.chapter as LateActNumber;
+    if (this.lateConclusionPage === 'finale') { this.closeChapterAchievement(); return; }
+    if (this.lateConclusionPage === 'rules') {
+      this.lateProgress[act] = claimLateReward(this.lateProgress[act], lateActs[act].steps);
+      if (!this.lateProgress[act].rewardClaimed) return;
+      this.saveLateProgress();
+      this.spawnLateCompanion(lateActs[act].spirit);
+      this.populateArea(this.area);
+      this.showLateActConclusion(true);
+    } else if (act < 6) this.enterLateAct((act + 1) as LateActNumber);
+    else this.showCampaignFinale();
+  }
+
+  private showCampaignFinale(): void {
+    this.clearToasts();
+    this.chapterLayer?.destroy(true);
+    this.lateConclusionPage = 'finale';
+    const layer = this.add.container(0, 0).setScrollFactor(0).setDepth(110); this.chapterLayer = layer;
+    layer.add(this.add.rectangle(800, 450, 1600, 900, 0x071019, .96));
+    layer.add(localizedText(this, 800, 105, '終局 · 關係網', { fontSize: '40px', color: '#ffe0a0', fontStyle: 'bold' }).setOrigin(.5));
+    layer.add(localizedText(this, 800, 165, '六份檔案連成同一條追問：事實從哪裡來，權力應如何被約束？', { fontSize: '22px', color: '#c4dcd0' }).setOrigin(.5));
+    const titles = ['看見', '帳本的空白頁', '禮包裡的名字', '朋友價', '實習費', '沉默的申請'];
+    const notes = ['分開親見、轉述與推測', '帳簿、簽收及會面互相核對', '查清來源、受益人及請託', '合同、工程量及付款留痕', '招聘承諾與招錄權限分開', '流轉、時限及履職持續追查'];
+    spirits.forEach((spirit, i) => {
+      const x = 360 + (i % 3) * 440, y = 310 + Math.floor(i / 3) * 210;
+      layer.add(this.add.rectangle(x, y, 400, 180, 0x163440).setStrokeStyle(2, 0x8fbbad));
+      layer.add(localizedText(this, x, y - 49, `${i + 1} · ${titles[i]}`, { fontSize: '23px', color: '#fff0cf', fontStyle: 'bold' }).setOrigin(.5));
+      layer.add(localizedText(this, x, y - 4, `${spirit.name.hant} · ${spirit.virtue.hant}`, { fontSize: '20px', color: '#e9c66f' }).setOrigin(.5));
+      layer.add(localizedText(this, x, y + 42, notes[i], { fontSize: '17px', color: '#c4dcd0' }).setOrigin(.5));
+    });
+    layer.add(localizedText(this, 800, 665, '蓉姐：「調查不是急着替故事寫結局，而是讓每一項判斷都有來路。」\n主線完成。你仍可回街區收集果實、回答問題、培育六靈。', { fontSize: '21px', color: '#dcebe1', align: 'center', lineSpacing: 10 }).setOrigin(.5));
+    this.addButton(layer, 800, 760, 520, '回到街區 · 繼續培育六靈', () => this.closeChapterAchievement(), true);
+    this.saveWorldCheckpoint();
+  }
+
+  private addLawSourceButton(layer: Phaser.GameObjects.Container): void {
+    this.addButton(layer, 1420, 55, 280, '法規來源 ↗', () => window.open(legalLearning[this.chapter].url, '_blank', 'noopener,noreferrer'), true);
   }
 
   private companionCopy(): { intro: string; question: string; answers: [string, string]; win: string; lose: string; snack: string; stage: string; feed: string } {
@@ -1623,7 +1921,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private openCompanionPanel(): void {
-    const owned = this.selectedSpirit === 'xiezhi' ? this.companionUnlocked : this.selectedSpirit === 'baize' ? this.secondAct.rewardClaimed : this.thirdReward;
+    const owned = this.ownsSpirit(this.selectedSpirit);
     if (!owned || this.companionLayer || this.dialogueLayer || this.chapterLayer) return;
     this.activeSnackId = null;
     this.companionPanelMode = 'intro';
@@ -1644,6 +1942,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private renderCompanionPanel(message?: string): void {
+    this.companionRosterOpen = false;
     this.companionLayer?.destroy(true);
     const layer = this.add.container(0, 0).setScrollFactor(0).setDepth(135);
     this.companionLayer = layer;
@@ -1651,7 +1950,8 @@ export class WorldScene extends Phaser.Scene {
     this.tweens.add({ targets: layer, alpha: 1, duration: 180 });
     const copy = this.companionCopy();
     layer.add(this.add.rectangle(WIDTH / 2, HEIGHT / 2, WIDTH, HEIGHT, 0x071019, .68));
-    layer.add(this.add.rectangle(WIDTH / 2, HEIGHT / 2, 1050, 580, 0x102a37, .98).setStrokeStyle(3, 0xe9c66f));
+    layer.add(this.add.rectangle(WIDTH / 2, HEIGHT / 2, 1050, 760, 0x102a37, .98).setStrokeStyle(3, 0xe9c66f));
+    this.addButton(layer, 1200, 125, 220, '關閉檔案', () => this.closeCompanionPanel(), true);
     const form = getCompanionGrowthStage(this.companionProgress.fed);
     const portrait = this.add.image(460, 620, this.selectedSpirit !== 'xiezhi' ? 'world-' + this.selectedSpirit + '-' + form.id : form.id === 'young' ? 'xiezhi-sprites' : `companion-${form.id}`, 0).setDisplaySize(form.id === 'young' ? 230 : 300, this.selectedSpirit === 'xiezhi' && form.id === 'young' ? 230 : (form.id === 'young' ? 230 : 300) * 724 / 543).setOrigin(.5, 1);
     if (!this.ownsSpirit(this.selectedSpirit)) portrait.setTexture('fruit-' + this.selectedSpirit).setDisplaySize(150,150).setY(510);
@@ -1668,10 +1968,10 @@ export class WorldScene extends Phaser.Scene {
       if (this.companionProgress.snacks > 0) this.addButton(layer, 770, 650, 260, getLocale() === 'zh-Hans' ? '投喂零食' : '投餵零食', () => this.feedCompanion(), true);
       this.addButton(layer, 1110, 650, 250, getLocale() === 'zh-Hans' ? '继续探索' : '繼續探索', () => this.closeCompanionPanel(), true);
     } else if (this.companionPanelMode === 'quiz') {
-      this.addButton(layer, 770, 650, 300, copy.answers[0], () => this.answerCompanionQuiz(this.correctFirst), true);
-      this.addButton(layer, 1130, 650, 300, copy.answers[1], () => this.answerCompanionQuiz(!this.correctFirst), true);
+      this.addButton(layer, 890, 625, 800, copy.answers[0], () => this.answerCompanionQuiz(this.correctFirst), true);
+      this.addButton(layer, 890, 740, 800, copy.answers[1], () => this.answerCompanionQuiz(!this.correctFirst), true);
     } else if (this.companionPanelMode === 'result') {
-      if (this.companionLastAnswerCorrect && this.companionProgress.snacks > 0) this.addButton(layer, 770, 650, 260, getLocale() === 'zh-Hans' ? '立即投喂' : '立即投餵', () => this.feedCompanion(), true);
+      if (this.companionLastAnswerCorrect && this.companionProgress.snacks > 0 && this.ownsSpirit(this.selectedSpirit)) this.addButton(layer, 770, 650, 260, getLocale() === 'zh-Hans' ? '立即投喂' : '立即投餵', () => this.feedCompanion(), true);
       if (!this.companionLastAnswerCorrect) this.addButton(layer, 770, 650, 260, getLocale() === 'zh-Hans' ? '再想想' : '再想想', () => this.startCompanionQuiz(), true);
       this.addButton(layer, 1080, 650, 280, getLocale() === 'zh-Hans' ? '回到街区' : '回到街區', () => this.closeCompanionPanel(), true);
     } else {
@@ -1706,7 +2006,7 @@ export class WorldScene extends Phaser.Scene {
 
   private feedCompanion(): void {
     const before = getCompanionGrowthStage(this.companionProgress.fed).id;
-    const unlockedPet = this.selectedSpirit === 'xiezhi' ? this.companionUnlocked : this.selectedSpirit === 'baize' ? this.secondAct.rewardClaimed : this.thirdReward;
+    const unlockedPet = this.ownsSpirit(this.selectedSpirit);
     if (!unlockedPet) { this.showToast('果實已保存，完成本幕並領取精靈後即可投餵。'); return; }
     const next = feedCompanion(this.companionProgress);
     if (!next) return;
@@ -1724,19 +2024,33 @@ export class WorldScene extends Phaser.Scene {
     this.tweens.add({ targets: snack, x: 460, y: 510, scaleX: .45, scaleY: .45, duration: 620, ease: 'Cubic.easeIn', onComplete: () => {
       snack.destroy();
       this.tweens.add({ targets: heart, y: 380, alpha: 1, scaleX: 1.18, scaleY: 1.18, yoyo: true, duration: 430, repeat: 1 });
-      if (this.companion) this.tweens.add({ targets: this.companion, scaleX: this.companion.scaleX * 1.22, scaleY: this.companion.scaleY * 1.22, yoyo: true, duration: 240, repeat: 1 });
+      const pet = this.selectedSpirit === 'xiezhi' ? this.companion : this.selectedSpirit === 'baize' ? this.baizeFollower : this.selectedSpirit === 'pixiu' ? this.pixiuFollower : this.lateFollowers.get(this.selectedSpirit);
+      if (pet) this.tweens.add({ targets: pet, scaleX: pet.scaleX * 1.22, scaleY: pet.scaleY * 1.22, yoyo: true, duration: 240, repeat: 1 });
     } });
   }
 
   private handleCompanionPointer(x: number, y: number): void {
+    if (this.companionRosterOpen) {
+      if (hitsButton(x, y, 800, 785, 330, this.touchLayout ? 88 : 54)) { this.closeCompanionPanel(); return; }
+      for (let i = 0; i < spirits.length; i++) {
+        const cx = 430 + i % 3 * 370, cy = 310 + Math.floor(i / 3) * 225;
+        if (Math.abs(x - cx) <= 165 && Math.abs(y - cy) <= 98) {
+          const id = spirits[i].id;
+          if (!this.ownsSpirit(id)) { this.showToast(`完成第${i + 1}幕並領獎後，這位精靈才會同行。`); return; }
+          this.selectedSpirit = id; this.companionPanelMode = 'intro'; this.activeSnackId = null; this.renderCompanionPanel(); return;
+        }
+      }
+      return;
+    }
+    if (hitsButton(x, y, 1200, 125, 220, this.touchLayout ? 88 : 54)) { this.closeCompanionPanel(); return; }
     if (hitsButton(x, y, 1110, 650, 250, this.touchLayout ? 88 : 54) && this.companionPanelMode === 'intro') { this.closeCompanionPanel(); return; }
     if (this.companionPanelMode === 'intro' && this.companionProgress.snacks > 0 && hitsButton(x, y, 770, 650, 260, this.touchLayout ? 88 : 54)) { this.feedCompanion(); return; }
     if (this.companionPanelMode === 'quiz') {
-      if (hitsButton(x, y, 770, 650, 300, this.touchLayout ? 88 : 54)) { this.answerCompanionQuiz(this.correctFirst); return; }
-      if (hitsButton(x, y, 1130, 650, 300, this.touchLayout ? 88 : 54)) { this.answerCompanionQuiz(!this.correctFirst); return; }
+      if (hitsButton(x, y, 890, 625, 800, this.touchLayout ? 88 : 54)) { this.answerCompanionQuiz(this.correctFirst); return; }
+      if (hitsButton(x, y, 890, 740, 800, this.touchLayout ? 88 : 54)) { this.answerCompanionQuiz(!this.correctFirst); return; }
     }
     if (this.companionPanelMode === 'result') {
-      if (this.companionLastAnswerCorrect && this.companionProgress.snacks > 0 && hitsButton(x, y, 770, 650, 260, this.touchLayout ? 88 : 54)) { this.feedCompanion(); return; }
+      if (this.companionLastAnswerCorrect && this.companionProgress.snacks > 0 && this.ownsSpirit(this.selectedSpirit) && hitsButton(x, y, 770, 650, 260, this.touchLayout ? 88 : 54)) { this.feedCompanion(); return; }
       if (!this.companionLastAnswerCorrect && hitsButton(x, y, 770, 650, 260, this.touchLayout ? 88 : 54)) { this.startCompanionQuiz(); return; }
       if (hitsButton(x, y, 1080, 650, 280, this.touchLayout ? 88 : 54)) this.closeCompanionPanel();
     }
@@ -1746,15 +2060,39 @@ export class WorldScene extends Phaser.Scene {
     }
   }
 
-  private closeCompanionPanel(): void { this.companionLayer?.destroy(true); this.companionLayer = null; }
+  private closeCompanionPanel(): void { this.companionLayer?.destroy(true); this.companionLayer = null; this.companionRosterOpen = false; }
+
+  private openCompanionRoster(): void {
+    if (this.dialogueLayer || this.chapterLayer || this.helpLayer || this.mapLayerUi || this.notebookLayer) return;
+    this.companionLayer?.destroy(true);
+    this.companionRosterOpen = true;
+    const layer = this.add.container(0, 0).setScrollFactor(0).setDepth(135); this.companionLayer = layer;
+    layer.add(this.add.rectangle(800, 450, 1600, 900, 0x071019, .94));
+    layer.add(localizedText(this, 800, 112, '六靈同行 · 夥伴檔案', { fontSize: '36px', color: '#ffe0a0', fontStyle: 'bold' }).setOrigin(.5));
+    layer.add(localizedText(this, 800, 164, '點選已領取的精靈，查看專屬果實與成長進度。', { fontSize: '22px', color: '#c4dcd0' }).setOrigin(.5));
+    spirits.forEach((spirit, i) => {
+      const x = 430 + i % 3 * 370, y = 310 + Math.floor(i / 3) * 225;
+      const owned = this.ownsSpirit(spirit.id), p = this.spiritProgress[spirit.id];
+      const stage = getCompanionGrowthStage(p.fed);
+      layer.add(this.add.rectangle(x, y, 330, 196, owned ? 0x193b48 : 0x142530).setStrokeStyle(2, owned ? 0xe9c66f : 0x47616a));
+      if (owned) layer.add(this.add.image(x - 85, y + 48, spirit.id === 'xiezhi' ? stage.id === 'young' ? 'xiezhi-sprites' : `companion-${stage.id}` : `world-${spirit.id}-${stage.id}`, 0).setOrigin(.5, 1).setDisplaySize(85, spirit.id === 'xiezhi' && stage.id === 'young' ? 85 : 114));
+      else layer.add(localizedText(this, x - 85, y - 15, '?', { fontSize: '62px', color: '#627e82' }).setOrigin(.5));
+      layer.add(localizedText(this, x + 42, y - 50, owned ? spiritNames[spirit.id] : `第${i + 1}幕獎勵`, { fontSize: '23px', color: owned ? '#ffe0a0' : '#9bb5b1' }).setOrigin(.5));
+      layer.add(localizedText(this, x + 42, y - 6, owned ? spirit.virtue.hant : '尚未領取', { fontSize: '18px', color: '#c4dcd0' }).setOrigin(.5));
+      layer.add(localizedText(this, x, y + 65, owned ? `果實 ${p.snacks} · 投餵 ${p.fed}/6 · ${spirit.forms.find(f => f.id === stage.id)!.hant}` : '完成調查 → 閱讀規則 → 領獎', { fontSize: '17px', color: '#a8c8bb' }).setOrigin(.5));
+    });
+    this.addButton(layer, 800, 785, 330, '回到街區', () => this.closeCompanionPanel(), true);
+  }
 
   private closePanels(): void {
+    // Close only the panel that was open when Escape arrived. Completing a
+    // conversation can create its reward sheet; do not destroy that new sheet.
     if (this.companionLayer) this.closeCompanionPanel();
-    if (this.dialogueLayer) this.advanceDialogue();
-    if (this.mapLayerUi) { this.mapLayerUi.destroy(true); this.mapLayerUi = null; }
-    if (this.notebookLayer) { this.notebookLayer.destroy(true); this.notebookLayer = null; }
-    if (this.helpLayer) { this.helpLayer.destroy(true); this.helpLayer = null; }
-    if (this.chapterLayer) this.closeChapterAchievement();
+    else if (this.dialogueLayer) this.advanceDialogue();
+    else if (this.mapLayerUi) { this.mapLayerUi.destroy(true); this.mapLayerUi = null; }
+    else if (this.notebookLayer) { this.notebookLayer.destroy(true); this.notebookLayer = null; }
+    else if (this.helpLayer) { this.helpLayer.destroy(true); this.helpLayer = null; }
+    else if (this.chapterLayer) this.closeChapterAchievement();
   }
 
   private drawMiniMap(): void {
@@ -1785,7 +2123,13 @@ export class WorldScene extends Phaser.Scene {
   private showToast(message: string): void {
     const text = localizedText(this, WIDTH / 2, this.touchLayout ? 90 : 328, wrapCjkText(message, this.touchLayout ? 24 : 58), { fontSize: this.touchLayout ? '23px' : '18px', color: '#fff0cf', backgroundColor: '#102631ed', padding: { x: 22, y: 12 }, align: 'center' })
       .setOrigin(0.5).setScrollFactor(0).setDepth(120);
-    this.tweens.add({ targets: text, alpha: 0, delay: 1700, duration: 250, onComplete: () => text.destroy() });
+    this.activeToasts.add(text);
+    this.tweens.add({ targets: text, alpha: 0, delay: 1700, duration: 250, onComplete: () => { this.activeToasts.delete(text); text.destroy(); } });
+  }
+
+  private clearToasts(): void {
+    for (const text of this.activeToasts) { this.tweens.killTweensOf(text); text.destroy(); }
+    this.activeToasts.clear();
   }
 
   private onTouchAxis = (event: CustomEvent<{ x: number; y: number }>): void => {
@@ -1793,9 +2137,10 @@ export class WorldScene extends Phaser.Scene {
   };
 
   private onTouchAction = (event: CustomEvent<string>): void => {
+    if (event.detail === 'pets') { this.openCompanionRoster(); return; }
     if (event.detail === 'help') this.toggleHelp();
     if (event.detail === 'interact') {
-      if (this.chapterLayer) { if (this.chapter >= 2) this.handleChapterPointer(800, 720); else if (this.chapterPage === 'law') this.claimCompanionAndShowNext(); else this.enterActTwo(); return; }
+      if (this.chapterLayer) { if (this.chapter >= 2) this.handleChapterPointer(800, this.chapter >= 4 ? 760 : 720); else if (this.chapterPage === 'law') this.claimCompanionAndShowNext(); else this.enterActTwo(); return; }
       if (this.helpLayer) return;
       if (this.dialogueLayer) this.confirmDialogue();
       else if (this.nearbyInteraction) this.openDialogue(this.nearbyInteraction);

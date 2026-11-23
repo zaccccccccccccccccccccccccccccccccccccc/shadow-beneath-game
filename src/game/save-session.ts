@@ -10,6 +10,7 @@ export const GAME_SAVE_KEYS = [
   'under-shadow-current-chapter',
   'under-shadow-act-two-v1',
   'under-shadow-act-three-v1',
+  'under-shadow-late-acts-v1',
   'under-shadow-xiezhi-chapter1-claimed-v2',
   'under-shadow-xiezhi-v3',
   'under-shadow-species-fruits-v1',

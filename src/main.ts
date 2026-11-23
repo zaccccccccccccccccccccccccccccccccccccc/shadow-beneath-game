@@ -5,7 +5,6 @@ import '@fontsource/noto-sans-sc/chinese-simplified-400.css';
 import '@fontsource/noto-sans-sc/chinese-simplified-700.css';
 import { IntroScene } from './game/IntroScene';
 import { WorldScene } from './game/WorldScene';
-import { ActTwoScene } from './game/ActTwoScene';
 import { SpiritWalkLabScene } from './game/SpiritWalkLabScene';
 import { CharacterGalleryScene } from './game/CharacterGalleryScene';
 import { setPlayerName } from './game/profile';
@@ -50,7 +49,7 @@ const localeFields: Array<[string, Parameters<typeof t>[0]]> = [
 function applyLocale(): void {
   const locale = getLocale();
   document.documentElement.lang = locale;
-  document.title = locale === 'zh-Hans' ? '阴影之下 · 第一至三幕' : '陰影之下 · 第一至三幕';
+  document.title = locale === 'zh-Hans' ? '阴影之下 · 六幕连续调查' : '陰影之下 · 六幕連續調查';
   if (localeSelect) localeSelect.value = locale;
   localeFields.forEach(([id, key]) => {
     const element = document.getElementById(id);
@@ -68,6 +67,8 @@ function applyLocale(): void {
   const musicLabel = document.getElementById('music-label');
   if (musicLabel) musicLabel.textContent = locale === 'zh-Hans' ? '背景音乐' : '背景音樂';
   const touchHelp = document.getElementById('touch-help');
+  const petsButton = document.getElementById('mobile-pets');
+  if (petsButton) petsButton.textContent = locale === 'zh-Hans' ? '精灵' : '精靈';
   if (touchHelp) touchHelp.textContent = t('touchHelp');
   if (nameInput && (!nameInput.value.trim() || nameInput.value === '见习生' || nameInput.value === '見習生')) {
     nameInput.value = locale === 'zh-Hans' ? '见习生' : '見習生';
@@ -219,6 +220,7 @@ function setupMobileControls(): void {
   document.getElementById('mobile-help')?.addEventListener('click', () => window.dispatchEvent(new CustomEvent('under-shadow-action', { detail: 'help' })));
   document.getElementById('mobile-notebook')?.addEventListener('click', () => window.dispatchEvent(new CustomEvent('under-shadow-action', { detail: 'notebook' })));
   document.getElementById('mobile-map')?.addEventListener('click', () => window.dispatchEvent(new CustomEvent('under-shadow-action', { detail: 'map' })));
+  document.getElementById('mobile-pets')?.addEventListener('click', () => window.dispatchEvent(new CustomEvent('under-shadow-action', { detail: 'pets' })));
 }
 
 
