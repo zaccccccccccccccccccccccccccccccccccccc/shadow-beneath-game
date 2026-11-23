@@ -26,7 +26,7 @@
 - [x] Six companion render: preload existing sixspecies3stage images, unified follow positions/feet depth/idle/gait, own progress, click feed, no initial ownership.
 - [x] Opening voice: speechSynthesis + fallback readable timing, voice switch/skip/Escape, cancellation clean.
 - [x] Verification: full tests/build, terrain hash equality, real browser sandbox fresh tutorial→acts1–6 using actual buttons; sixspecies feed/evolution/cooldown and mobile overlays. Fix defects.
-- [ ] Review/publish: independent source review, correct important findings, deploy GitHub Pages, verify public page + deliver test report and open limitations.
+- [x] Review/publish: independent source review, correct important findings, deploy GitHub Pages, verify public page + deliver test report and open limitations.
 
 ## Decisions
 - User requested autonomous overnight execution; no new design approval pause.
