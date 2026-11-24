@@ -9,6 +9,7 @@ import {
   type WorldRect,
 } from '../src/game/world-geometry';
 import { createWorldFruitLayout } from '../src/game/fruit-world';
+import { oracleOverlap } from './geometry-oracle';
 
 /** Read-only audit. No relocated targets, expanded interaction ranges or altered blockers.
  * Existing tests accept non-null snapped paths and clear waypoints, missing the endpoint
@@ -30,8 +31,7 @@ afterAll(() => {
 
 // Independent positive-area intersection oracle: mere edge contact is legal.
 function intersects(a: WorldRect, b: WorldRect): boolean {
-  return Math.min(a.x + a.width, b.x + b.width) > Math.max(a.x, b.x) &&
-    Math.min(a.y + a.height, b.y + b.height) > Math.max(a.y, b.y);
+  return oracleOverlap(a, b);
 }
 
 function exactFeetClear(point: Point, map: DistrictMap): boolean {
@@ -123,7 +123,9 @@ describe('immutable world route audit', () => {
     expect(issues).toEqual([]);
   });
 
-  it.each(maps)('covers every legal feet position in $id independent of fruit seed', map => {
+  // This rectangular partition theorem only applies to axis-aligned blockers.
+  // Polygon maps retain the complete grid/route audit and explicit contour samples below.
+  it.each(maps.filter(map => !map.blockers.some(block => block.polygon)))('covers every legal feet position in $id independent of fruit seed', map => {
     const nodes: Point[] = [];
     for (let y = 24; y < DISTRICT_HEIGHT; y += 48) for (let x = 24; x < DISTRICT_WIDTH; x += 48) {
       if (exactFeetClear({ x, y }, map)) nodes.push({ x, y });
@@ -152,6 +154,18 @@ describe('immutable world route audit', () => {
     // Covers any standable output for all uint32 seeds, not the generator's 2500-attempt
     // termination or every possible 36-fruit layout. Those are only sampled below.
   });
+
+  it.each(maps.filter(map => map.blockers.some(block => block.polygon)))(
+    'checks sub-grid contour approach witnesses in $id (not a continuous coverage proof)', map => {
+      const witnesses: Point[] = [];
+      for (const block of map.blockers) for (const vertex of block.polygon ?? []) {
+        for (const dx of [-32, 0, 32]) for (const dy of [-24, 0, 24]) {
+          const point = { x: vertex.x + dx, y: vertex.y + dy };
+          if (exactFeetClear(point, map)) witnesses.push(point);
+        }
+      }
+      for (const point of witnesses) expect(auditApproach(map, point, 2), `${point.x},${point.y}`).toEqual([]);
+    });
 
   it.each(seeds)('reaches all 36 original fruit coordinates with clear final axis legs for seed %i', seed => {
     const fruits = createWorldFruitLayout(seed);
@@ -210,7 +224,8 @@ describe('exact feet, roof collision and occlusion contracts', () => {
   });
 
   it.each(maps)('separates side-edge translucency from roof collision and front depth in $id', map => {
-    for (const block of map.blockers.filter(block => !isMapBoundary(block, DISTRICT_WIDTH, DISTRICT_HEIGHT))) {
+    // Legacy side-of-rectangle alpha assertions are not polygon roof-mask contracts.
+    for (const block of map.blockers.filter(block => !block.polygon && !isMapBoundary(block, DISTRICT_WIDTH, DISTRICT_HEIGHT))) {
       const y = block.y + block.height / 2;
       expect(canOccupyWorldPosition(block.x + block.width / 2, y, [block], DISTRICT_WIDTH, DISTRICT_HEIGHT), 'roof/wall interior').toBe(false);
       for (const x of [block.x - 16, block.x + block.width + 16]) {
@@ -229,7 +244,7 @@ describe('exact feet, roof collision and occlusion contracts', () => {
 
   it('exposes snapped blocked goals: non-null path alone does not prove roof access', () => {
     const map = districtMaps.oldTown;
-    const roof = { x: 850, y: 900 };
+    const roof = { x: 850, y: 1100 };
     const path = findWorldPath(map.spawn, roof, map.blockers, DISTRICT_WIDTH, DISTRICT_HEIGHT);
     expect(exactFeetClear(roof, map)).toBe(false);
     expect(path).not.toBeNull();

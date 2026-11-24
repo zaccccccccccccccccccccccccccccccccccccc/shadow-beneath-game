@@ -1,4 +1,9 @@
 import Phaser from 'phaser';
+import { trackSceneLoading, sceneAssetsFailed } from './scene-loading';
+import playerVerticalArt from '../assets/player-vertical-walk-v2.png';
+import { playerVerticalMetrics, getPlayerVerticalRuntimeModel } from './player-vertical-metrics';
+import { stepFollower, type FollowerMotion } from './follower-motion';
+import { loadSpiritDirections, prepareSpiritDirections, applySpiritDirection } from './spirit-art';
 import { facingFromMotion, nextPathIndex, WORLD_MOVEMENT_KEYS } from './locomotion';
 import { CHECKPOINT_KEY } from './save-session';
 import { legalLearning } from './legal-learning';
@@ -37,12 +42,11 @@ import baizeWalk from '../assets/spirit-baize-young-walk-v3.png';
 import { getSideWalkSprite, getVerticalWalkRow } from './player-animation';
 import { wrapCjkText } from './text-layout';
 import { hitsButton, toGamePoint } from './ui-hit-test';
-import { claimSnack, feedCompanion, getCompanionGrowthStage, getCompanionPose, getCompanionTrailPoint, type CompanionProgress, type TrailPoint } from './companion';
+import { claimSnack, feedCompanion, getCompanionGrowthStage, getCompanionTrailPoint, type CompanionProgress, type TrailPoint } from './companion';
 import { setMusicZone } from './music';
 import { addWaystoneSign } from './waystone-sign';
-import { loadCompanionForms, applyCompanionForm } from './companion-art';
 import { getDashedRouteSegments, getPathArrowAngle, getReachableRouteTarget, remainingHints } from './help-navigation';
-import { canOccupyWorldPosition, findWorldPath, getFeetDepth, getWallFrontDepth, getWallOcclusionAlpha, isMapBoundary, moveAlongWalkableAxes } from './world-geometry';
+import { canOccupyWorldPosition, isWorldSegmentClear, getOcclusion, findWorldPath, getFeetDepth, getWallFrontDepth, getWallOcclusionAlpha, isMapBoundary, moveAlongWalkableAxes } from './world-geometry';
 import {
   districtMaps,
   DISTRICT_HEIGHT,
@@ -66,7 +70,6 @@ import npcAtlas from '../assets/investigation-npc-atlas.png';
 import playerWalkCycle from '../assets/player-action-sheet.png';
 import playerSideApproved from '../assets/player-side-walk-v2.png';
 import xiezhiGuardian from '../assets/xiezhi-guardian.png';
-import xiezhiSpriteSheet from '../assets/xiezhi-sprite-sheet.png';
 import rongJieWorld from '../assets/rong-jie-world.png';
 import rongJieExpressions from '../assets/rong-jie-expressions.png';
 import protagonistExpressions from '../assets/character-protagonist-expressions.png';
@@ -101,7 +104,6 @@ export class WorldScene extends Phaser.Scene {
   private lateConclusionPage: 'rules' | 'reward' | 'finale' = 'rules';
   private notebookPage = 0;
   private companionRosterOpen = false;
-  private pointerAim: { x: number; y: number } | null = null;
   private queuedKeys = new Set<Phaser.Input.Keyboard.Key>();
   private miniHudObjects: Phaser.GameObjects.GameObject[] = [];
   private objectiveHudObjects: Phaser.GameObjects.GameObject[] = [];
@@ -115,9 +117,10 @@ export class WorldScene extends Phaser.Scene {
       if (!saved || !Object.prototype.hasOwnProperty.call(districtMaps, saved.area)) return;
       const area = saved.area as RegionId;
       const point = saved.position;
-      if (point && Number.isFinite(point.x) && Number.isFinite(point.y) && canOccupyWorldPosition(point.x, point.y, districtMaps[area].blockers, DISTRICT_WIDTH, DISTRICT_HEIGHT)) {
-        this.area = area; this.player.setPosition(point.x, point.y); this.moveTarget.set(point.x, point.y);
-      }
+      const safePoint = point && Number.isFinite(point.x) && Number.isFinite(point.y) && canOccupyWorldPosition(point.x, point.y, districtMaps[area].blockers, DISTRICT_WIDTH, DISTRICT_HEIGHT)
+        ? point : districtMaps[area].spawn;
+      this.area = area;
+      this.player.setPosition(safePoint.x,safePoint.y); this.moveTarget.set(safePoint.x,safePoint.y);
       for (const key of Object.keys(this.tutorial) as Array<keyof typeof this.tutorial>) this.tutorial[key] = saved.tutorial?.[key] === true;
       const allowedClues = new Set(worldInteractions.flatMap(npc => npc.choices.flatMap(choice => choice.clue ? [choice.clue] : [])));
       if (Array.isArray(saved.clues)) this.clues = saved.clues.filter((key: CopyKey) => allowedClues.has(key));
@@ -187,6 +190,7 @@ export class WorldScene extends Phaser.Scene {
   private player!: Phaser.GameObjects.Container;
   private areaActors: Phaser.GameObjects.Container[] = [];
   private wallFronts: Phaser.GameObjects.Image[] = [];
+  private roofFronts: Array<{image:Phaser.GameObjects.Image; mask:Phaser.GameObjects.Graphics}> = [];
   private portalMarkers: Array<{ portal: WorldPortal; glow: Phaser.GameObjects.Ellipse; slab: Phaser.GameObjects.Rectangle; inset: Phaser.GameObjects.Rectangle; rune: Phaser.GameObjects.Text; label: Phaser.GameObjects.Text }> = [];
   private actorSprite!: Phaser.GameObjects.Sprite;
   private facing: Facing = 'back';
@@ -206,7 +210,7 @@ export class WorldScene extends Phaser.Scene {
   private companion: Phaser.GameObjects.Sprite | null = null;
   private companionTrail: TrailPoint[] = [];
   private companionUnlocked = false;
-  private companionPhase = 0;
+  private followerMotion = new Map<SpiritId, FollowerMotion>();
   private companionLayer: Phaser.GameObjects.Container | null = null;
   private companionPanelMode: 'intro' | 'quiz' | 'result' | 'feed' = 'intro';
   private companionLastAnswerCorrect = false;
@@ -276,7 +280,7 @@ export class WorldScene extends Phaser.Scene {
   private spawnCompanion(): void {
     if (this.companion) return;
     const stage = getCompanionGrowthStage(this.companionProgress.fed);
-    this.companion = this.add.sprite(this.player.x - 55, this.player.y + 12, 'xiezhi-sprites', 0)
+    this.companion = this.add.sprite(this.player.x - 55, this.player.y + 12, 'world-xiezhi-young', 0)
       .setDisplaySize(stage.size, stage.size).setOrigin(0.5, 1).setDepth(getFeetDepth(this.player.y + 12));
     this.companionTrail = [{ x: this.player.x - 55, y: this.player.y + 12 }];
   }
@@ -306,65 +310,43 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private updateCompanion(delta: number): void {
-    let followerIndex = 0;
-    for (const [id, pet] of this.lateFollowers) {
-      const angle = Math.PI * (0.15 + followerIndex * .7);
-      const tx = this.player.x + Math.cos(angle) * 125;
-      const ty = this.player.y + 48 + Math.sin(angle) * 38;
-      pet.x += (tx - pet.x) * Math.min(1, delta / 240);
-      pet.y += (ty - pet.y) * Math.min(1, delta / 240);
-      const stage = getCompanionGrowthStage(this.spiritProgress[id].fed);
-      pet.setTexture('world-' + id + '-' + stage.id, this.walking ? Math.floor(this.gaitDistance / 48) % 4 : 0)
-        .setFlipX(this.facing === 'left').setDisplaySize(stage.size, stage.size * 724 / 543)
-        .setDepth(getFeetDepth(pet.y)).setAlpha(getWallOcclusionAlpha(pet.x, pet.y, districtMaps[this.area].blockers, DISTRICT_WIDTH, DISTRICT_HEIGHT));
-      followerIndex++;
+    const latest=this.companionTrail.at(-1);
+    if (this.walking && (!latest || Math.hypot(this.player.x-latest.x,this.player.y-latest.y)>6)) {
+      this.companionTrail.push({x:this.player.x,y:this.player.y});
+      if (this.companionTrail.length>180) this.companionTrail.shift();
     }
-    if (this.baizeFollower) {
-      const dx = this.player.x - 100 - this.baizeFollower.x;
-      const dy = this.player.y + 32 - this.baizeFollower.y;
-      const moving = this.walking;
-      this.baizeFollower.setPosition(this.baizeFollower.x + dx * Math.min(1, delta / 220), this.baizeFollower.y + dy * Math.min(1, delta / 220));
-      this.baizeFollower.setTexture('world-baize-' + getCompanionGrowthStage(this.spiritProgress.baize.fed).id, moving ? Math.floor(this.gaitDistance / 48) % 4 : 0).setDisplaySize(getCompanionGrowthStage(this.spiritProgress.baize.fed).size, getCompanionGrowthStage(this.spiritProgress.baize.fed).size * 724 / 543).setFlipX(this.facing === 'left').setDepth(getFeetDepth(this.baizeFollower.y));
+    const followers: Array<[SpiritId,Phaser.GameObjects.Sprite | null | undefined]> = [
+      ['xiezhi',this.companion],['baize',this.baizeFollower],['pixiu',this.pixiuFollower],...this.lateFollowers,
+    ];
+    let index=0;
+    for (const [id,pet] of followers) {
+      if (!pet) continue;
+      if (!this.followerMotion.has(id) && !this.canOccupy(pet.x,pet.y)) pet.setPosition(this.player.x,this.player.y);
+      const target=getCompanionTrailPoint(this.player,this.companionTrail,78+index++*62);
+      const previous=this.followerMotion.get(id) ?? {x:pet.x,y:pet.y,distance:0,facing:this.facing};
+      const next=stepFollower({...previous,x:pet.x,y:pet.y},target,this.walking,delta,
+        (x,y)=>this.canOccupy(x,y),
+        (from,to)=>isWorldSegmentClear(from,to,districtMaps[this.area].blockers,DISTRICT_WIDTH,DISTRICT_HEIGHT));
+      this.followerMotion.set(id,next);
+      pet.setPosition(next.x,next.y);
+      applySpiritDirection(pet,id,this.spiritProgress[id].fed,next.facing,next.moving,next.distance);
+      pet.setDepth(getFeetDepth(pet.y)).setAlpha(getWallOcclusionAlpha(pet.x,pet.y,districtMaps[this.area].blockers,DISTRICT_WIDTH,DISTRICT_HEIGHT));
     }
-    if (this.pixiuFollower) {
-      const p = this.pixiuFollower;
-      p.x += (this.player.x + 90 - p.x) * Math.min(1, delta / 240);
-      p.y += (this.player.y + 35 - p.y) * Math.min(1, delta / 240);
-      const stage = getCompanionGrowthStage(this.spiritProgress.pixiu.fed);
-      p.setTexture('world-pixiu-' + stage.id, this.walking ? Math.floor(this.gaitDistance / 48) % 4 : 0).setFlipX(this.facing === 'left').setDisplaySize(stage.size, stage.size * 724 / 543).setDepth(getFeetDepth(p.y));
-    }
-    const companion = this.companion;
-    if (!companion) return;
-    const latest = this.companionTrail[this.companionTrail.length - 1];
-    if (!latest || Math.hypot(this.player.x - latest.x, this.player.y - latest.y) > 9) {
-      this.companionTrail.push({ x: this.player.x, y: this.player.y });
-      if (this.companionTrail.length > 90) this.companionTrail.shift();
-    }
-    const target = getCompanionTrailPoint(this.player, this.companionTrail, 78);
-    const follow = Math.min(1, delta / 130);
-    const dx = target.x - companion.x;
-    const dy = target.y - companion.y;
-    // Animate gait only while the player is actively walking. The pet may
-    // finish easing into place, but its legs stop with the player's input.
-    const moving = this.walking;
-    companion.setPosition(companion.x + dx * follow, companion.y + dy * follow);
-    const pose = getCompanionPose(dx, dy, moving, this.companionPhase);
-    if (moving) this.companionPhase += delta / 240;
-    const col = ({ front: 0, left: 1, right: 2, back: 3 } as const)[this.facing];
-    const row = moving ? (Math.floor(this.companionPhase) % 2) + 1 : (Math.floor(this.time.now / 900) % 5 === 0 ? 3 : 0);
-    const stage = getCompanionGrowthStage(this.spiritProgress.xiezhi.fed);
-    companion.setTexture('xiezhi-sprites', row * 4 + col).setFlipX(false).setDisplaySize(stage.size, stage.size);
-    applyCompanionForm(companion, this.spiritProgress.xiezhi.fed, this.facing, moving, this.companionPhase);
-    companion.setDepth(getFeetDepth(companion.y));
-    companion.setAlpha(getWallOcclusionAlpha(companion.x, companion.y, districtMaps[this.area].blockers, DISTRICT_WIDTH, DISTRICT_HEIGHT));
   }
 
   private resetCompanionAfterTravel(): void {
-    for (const pet of this.lateFollowers.values()) pet.setPosition(this.player.x, this.player.y + 45);
-    this.baizeFollower?.setPosition(this.player.x - 100, this.player.y + 32);
-    this.pixiuFollower?.setPosition(this.player.x + 90, this.player.y + 35);
-    this.companionTrail = [{ x: this.player.x - 55, y: this.player.y + 12 }];
-    this.companion?.setPosition(this.player.x - 55, this.player.y + 12);
+    this.followerMotion.clear();
+    const pets=[this.companion,this.baizeFollower,this.pixiuFollower,...this.lateFollowers.values()].filter(Boolean) as Phaser.GameObjects.Sprite[];
+    pets.forEach((pet,index)=>{
+      let spot={x:this.player.x,y:this.player.y};
+      for (let n=0;n<24;n++) {
+        const angle=(index*4+n)*Math.PI/12;
+        const candidate={x:this.player.x+Math.cos(angle)*70,y:this.player.y+Math.sin(angle)*45};
+        if (this.canOccupy(candidate.x,candidate.y)) {spot=candidate;break;}
+      }
+      pet.setPosition(spot.x,spot.y);
+    });
+    this.companionTrail=[{x:this.player.x,y:this.player.y}];
   }
 
   private unlockCompanion(): void {
@@ -376,6 +358,9 @@ export class WorldScene extends Phaser.Scene {
   }
 
   preload(): void {
+    trackSceneLoading(this);
+    this.load.image(playerVerticalMetrics.textureKey,playerVerticalArt);
+    loadSpiritDirections(this);
     for (const [key, asset] of Object.entries({ 'world-baize-young': baizeWalk, 'world-baize-growing': baizeGrowing, 'world-baize-guardian': baizeGuardian, 'world-pixiu-young': pixiuWalk, 'world-pixiu-growing': pixiuGrowing, 'world-pixiu-guardian': pixiuGuardian,
       'world-qilin-young': qilinYoung, 'world-qilin-growing': qilinGrowing, 'world-qilin-guardian': qilinGuardian,
       'world-xuanwu-young': xuanwuYoung, 'world-xuanwu-growing': xuanwuGrowing, 'world-xuanwu-guardian': xuanwuGuardian,
@@ -388,14 +373,6 @@ export class WorldScene extends Phaser.Scene {
     this.load.image('fruit-xuanwu', recordFruit);
     this.load.image('fruit-qinglong', daylightFruit);
     this.load.image('world-baize-reward', baizeRewardArt);
-    loadCompanionForms(this);
-    this.load.maxParallelDownloads = 4;
-    this.load.on('progress', (progress: number) => {
-      window.dispatchEvent(new CustomEvent('under-shadow-load-progress', { detail: { progress } }));
-    });
-    this.load.on('loaderror', (file: Phaser.Loader.File) => {
-      window.dispatchEvent(new CustomEvent('under-shadow-load-error', { detail: { file: file.src } }));
-    });
     this.load.image('world-overview', mapOverview);
     this.load.spritesheet('npc-atlas', npcAtlas, { frameWidth: NPC_CELL, frameHeight: NPC_CELL });
     this.load.image('rong-jie-world', rongJieWorld);
@@ -404,13 +381,17 @@ export class WorldScene extends Phaser.Scene {
     this.load.spritesheet('player-walk-cycle', playerWalkCycle, { frameWidth: 313, frameHeight: 313 });
     this.load.spritesheet('player-side-approved', playerSideApproved, { frameWidth: 627, frameHeight: 627 });
     this.load.image('xiezhi-guardian', xiezhiGuardian);
-    // The generated 4x4 sheet is 1254px square, so each cell is 313px; 256px
-    // cuts through the creatures and makes a single pet render as fragments.
-    this.load.spritesheet('xiezhi-sprites', xiezhiSpriteSheet, { frameWidth: 313, frameHeight: 313 });
     (Object.keys(backgroundAssets) as RegionId[]).forEach((id) => this.load.image(`district-${id}`, backgroundAssets[id]));
   }
 
   create(): void {
+    if (sceneAssetsFailed(this)) { this.scene.pause(); return; }
+    const verticalTexture=this.textures.get(playerVerticalMetrics.textureKey);
+    for (const frame of playerVerticalMetrics.frames) {
+      const b=frame.sourceBBox;
+      if (!verticalTexture.has(frame.frameName)) verticalTexture.add(frame.frameName,0,b.x,b.y,b.width,b.height);
+    }
+    prepareSpiritDirections(this);
     document.body.dataset.gameUi = 'world';
     const atlas = this.textures.get('npc-atlas');
     for (let i = 0; i < 8; i++) if (!atlas.has(`bust-${i}`)) atlas.add(`bust-${i}`, 0, (i % 4) * NPC_CELL + 90, Math.floor(i / 4) * NPC_CELL, 263, 270);
@@ -470,6 +451,7 @@ export class WorldScene extends Phaser.Scene {
       this.helpUses = savedHelpUses;
       this.updateObjectives(true);
     }
+    this.resetCompanionAfterTravel();
     this.cameras.main.setBounds(0, 0, DISTRICT_WIDTH, DISTRICT_HEIGHT);
     this.cameras.main.startFollow(this.player, true, 0.1, 0.1);
     this.cameras.main.fadeIn(520, 7, 16, 25);
@@ -502,16 +484,18 @@ export class WorldScene extends Phaser.Scene {
     this.syncGameUi();
     if (!this.transitioning && !this.dialogueLayer && !this.companionLayer && !this.mapLayerUi && !this.notebookLayer && !this.helpLayer && !this.chapterLayer) this.movePlayer(delta);
     else if (this.walking) { this.walking = false; this.syncPlayerPose(); }
-    if (this.pointerAim && !this.dialogueLayer && !this.companionLayer && !this.chapterLayer && !this.helpLayer && !this.notebookLayer && !this.mapLayerUi) {
-      const aim = this.cameras.main.getWorldPoint(this.pointerAim.x, this.pointerAim.y);
-      if (Math.hypot(aim.x - this.player.x, aim.y - this.player.y) > 28) this.setFacing(this.facingFor(aim.x - this.player.x, aim.y - this.player.y));
-    }
     if (this.pendingInteraction && Phaser.Math.Distance.Between(this.player.x, this.player.y, this.pendingInteraction.x, this.pendingInteraction.y) <= INTERACT_RADIUS) {
       this.pendingInteraction = null;
       this.showToast(t('arrivedInteract'));
     }
     this.player.setDepth(getFeetDepth(this.player.y));
-    this.player.setAlpha(getWallOcclusionAlpha(this.player.x, this.player.y, districtMaps[this.area].blockers, DISTRICT_WIDTH, DISTRICT_HEIGHT));
+    const occluders=districtMaps[this.area].occluders;
+    this.player.setAlpha(occluders?1:getWallOcclusionAlpha(this.player.x,this.player.y,districtMaps[this.area].blockers,DISTRICT_WIDTH,DISTRICT_HEIGHT));
+    if (occluders) {
+      const overlap=getOcclusion(this.player.x,this.player.y,occluders);
+      const active=new Set(overlap.occluderIndices);
+      this.roofFronts.forEach(({image},index)=>image.setAlpha(active.has(index)?overlap.occluderAlpha:1));
+    }
     this.updateCompanion(delta);
     this.updateLanternLight();
     this.updateSemiAutoArrow();
@@ -567,6 +551,8 @@ export class WorldScene extends Phaser.Scene {
     this.areaActors = [];
     this.wallFronts.forEach((wall) => wall.destroy());
     this.wallFronts = [];
+    this.roofFronts.forEach(({image,mask})=>{image.destroy();mask.destroy();});
+    this.roofFronts=[];
     this.portalMarkers.forEach(({ glow }) => this.tweens.killTweensOf(glow));
     this.portalMarkers = [];
     this.mapLayer.removeAll(true);
@@ -661,11 +647,25 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private addWallFronts(area: RegionId, blockers: typeof districtMaps[RegionId]['blockers']): void {
+    const occluders=districtMaps[area].occluders;
+    if (occluders) {
+      for (const shape of occluders) {
+        const mask=this.make.graphics({x:0,y:0}).fillStyle(0xffffff);
+        mask.beginPath();
+        const points=shape.polygon ?? [{x:shape.x,y:shape.y},{x:shape.x+shape.width,y:shape.y},{x:shape.x+shape.width,y:shape.y+shape.height},{x:shape.x,y:shape.y+shape.height}];
+        mask.moveTo(points[0].x,points[0].y);
+        points.slice(1).forEach(point=>mask.lineTo(point.x,point.y));
+        mask.closePath();mask.fillPath();
+        const image=this.add.image(0,0,`district-${area}`).setOrigin(0).setDisplaySize(DISTRICT_WIDTH,DISTRICT_HEIGHT).setDepth(22).setMask(mask.createGeometryMask());
+        this.roofFronts.push({image,mask});
+      }
+      return;
+    }
     const texture = this.textures.get(`district-${area}`);
     const source = texture.getSourceImage() as HTMLImageElement;
     const scaleX = source.width / DISTRICT_WIDTH;
     const scaleY = source.height / DISTRICT_HEIGHT;
-    blockers.filter((block) => !isMapBoundary(block, DISTRICT_WIDTH, DISTRICT_HEIGHT) && block.width < DISTRICT_WIDTH * 0.95 && block.height < DISTRICT_HEIGHT * 0.6)
+    blockers.filter((block) => !block.polygon && !isMapBoundary(block, DISTRICT_WIDTH, DISTRICT_HEIGHT) && block.width < DISTRICT_WIDTH * 0.95 && block.height < DISTRICT_HEIGHT * 0.6)
       .forEach((block, index) => {
         const stripHeight = Math.min(58, Math.max(34, block.height * 0.13));
         const frameName = `front-${index}`;
@@ -747,37 +747,16 @@ export class WorldScene extends Phaser.Scene {
   private createInput(): void {
     const keys = this.input.keyboard;
     keys?.addKeys(WORLD_MOVEMENT_KEYS);
-    this.game.canvas.addEventListener('pointermove', this.onCanvasPointerMove);
     this.game.canvas.addEventListener('pointerup', this.onCanvasPointerUp, true);
     this.game.canvas.addEventListener('pointerdown', this.onCanvasPointerDown, true);
     this.game.canvas.addEventListener('wheel', this.onCanvasWheel, { passive: false });
-    this.game.canvas.addEventListener('pointerleave', this.clearPointerAim);
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
-      this.game.canvas.removeEventListener('pointermove', this.onCanvasPointerMove);
       this.game.canvas.removeEventListener('pointerup', this.onCanvasPointerUp, true);
       this.game.canvas.removeEventListener('pointerdown', this.onCanvasPointerDown, true);
       this.game.canvas.removeEventListener('wheel', this.onCanvasWheel);
-      this.game.canvas.removeEventListener('pointerleave', this.clearPointerAim);
     });
     void keys;
   }
-
-  private onCanvasPointerMove = (event: PointerEvent): void => {
-    if (event.pointerType === 'touch' || this.transitioning || this.dialogueLayer || this.companionLayer || this.mapLayerUi || this.notebookLayer || this.helpLayer || this.chapterLayer) return;
-    const bounds = this.game.canvas.getBoundingClientRect();
-    if (!bounds.width || !bounds.height) return;
-    const point = toGamePoint(event.clientX, event.clientY, bounds, WIDTH, HEIGHT);
-    const hudVisible = !this.objectiveHudObjects.length || (this.objectiveHudObjects[0] as Phaser.GameObjects.Image).alpha > .5;
-    if (hudVisible && point.x >= 24 && point.x <= 464 && point.y >= 24 && point.y <= (this.touchLayout ? 184 : 300)) return;
-    if (hudVisible && !this.touchLayout && point.x >= 42 && point.x <= 246 && point.y >= 286 && point.y <= 344) return;
-    if (point.x >= WIDTH - 280 && point.y <= 225 && this.miniGraphics.alpha > .5) return;
-    if (!this.touchLayout && hitsButton(point.x, point.y, 1440, 850, 240, 48)) return;
-    this.pointerAim = point;
-    const world = this.cameras.main.getWorldPoint(point.x, point.y);
-    if (Math.hypot(world.x - this.player.x, world.y - this.player.y) > 28) this.setFacing(this.facingFor(world.x - this.player.x, world.y - this.player.y));
-  };
-
-  private clearPointerAim = (): void => { this.pointerAim = null; };
 
   private onCanvasPointerUp = (event: PointerEvent): void => {
     if (event.pointerType === 'mouse' && event.button !== 0) return;
@@ -820,18 +799,19 @@ export class WorldScene extends Phaser.Scene {
       return;
     }
 
-    // Waystones have priority over pets that follow onto them. P / the roster
-    // always provides access to each companion independently of world overlap.
-    const pets: Array<[AvailableSpirit, Phaser.GameObjects.Sprite | null | undefined]> = [['baize', this.baizeFollower], ['pixiu', this.pixiuFollower], ...this.lateFollowers];
-    for (const [id, pet] of pets) if (pet && Math.abs(point.x - pet.x) < 50 && point.y >= pet.y - 120 && point.y < pet.y + 18) { this.selectedSpirit = id; this.openCompanionPanel(); return; }
-    if (this.companionUnlocked && this.companion && Math.abs(point.x - this.companion.x) < 70 && point.y >= this.companion.y - 112 && point.y <= this.companion.y + 24) {
-      this.selectedSpirit = 'xiezhi'; this.openCompanionPanel(); return;
-    }
+    // Prioritize a clicked fruit over followers standing on its pickup radius.
+    // P / the roster always gives independent access to every companion.
     const snackSpot = this.availableFruitSpots().find((spot) => spot.region === this.area && Phaser.Math.Distance.Between(point.x, point.y, spot.x, spot.y - 18) < 66);
     if (snackSpot) {
       if (Phaser.Math.Distance.Between(this.player.x, this.player.y, snackSpot.x, snackSpot.y) <= INTERACT_RADIUS) this.openSnackQuiz(snackSpot.id);
       else { this.navigateNear(snackSpot.x, snackSpot.y, 72); this.showToast(getLocale() === 'zh-Hans' ? '走近发光零食，回答问题后领取。' : '走近發光零食，回答問題後領取。'); }
       return;
+    }
+
+    const pets: Array<[AvailableSpirit, Phaser.GameObjects.Sprite | null | undefined]> = [['baize', this.baizeFollower], ['pixiu', this.pixiuFollower], ...this.lateFollowers];
+    for (const [id, pet] of pets) if (pet && Math.abs(point.x - pet.x) < 50 && point.y >= pet.y - 120 && point.y < pet.y + 18) { this.selectedSpirit = id; this.openCompanionPanel(); return; }
+    if (this.companionUnlocked && this.companion && Math.abs(point.x - this.companion.x) < 70 && point.y >= this.companion.y - 112 && point.y <= this.companion.y + 24) {
+      this.selectedSpirit = 'xiezhi'; this.openCompanionPanel(); return;
     }
     const clickedInteraction = worldInteractions
       .filter((item) => item.region === this.area && Math.abs(point.x - item.x) <= 100 && point.y >= item.y - 200 && point.y <= item.y + 30)
@@ -852,7 +832,6 @@ export class WorldScene extends Phaser.Scene {
   };
 
   private onCanvasPointerDown = (event: PointerEvent): void => {
-    if (event.pointerType === 'touch') this.clearPointerAim();
     const bounds = this.game.canvas.getBoundingClientRect();
     if (!bounds.width || !bounds.height) return;
     const point = toGamePoint(event.clientX, event.clientY, bounds, WIDTH, HEIGHT);
@@ -943,7 +922,7 @@ export class WorldScene extends Phaser.Scene {
     const ny = this.player.y + (this.moveTarget.y - this.player.y) / distance * step;
     const previousX = this.player.x;
     const previousY = this.player.y;
-    const next = moveAlongWalkableAxes(previousX, previousY, nx, ny, (x, y) => this.canOccupy(x, y));
+    const next = moveAlongWalkableAxes(previousX, previousY, nx, ny, (x, y) => this.canOccupy(x, y), (from,to) => isWorldSegmentClear(from,to,districtMaps[this.area].blockers,DISTRICT_WIDTH,DISTRICT_HEIGHT));
     this.player.setPosition(next.x, next.y);
     const moved = next.moved;
     if (moved) this.gaitDistance += Math.hypot(next.x - previousX, next.y - previousY);
@@ -992,15 +971,22 @@ export class WorldScene extends Phaser.Scene {
       // Bottom-row frames are the approved right-facing stride pair.
       // Left movement is their exact horizontal mirror so each leg exchange matches.
       const sprite = getSideWalkSprite(this.facing, this.gaitDistance);
-      this.actorSprite.setTexture('player-side-approved', sprite.frame).setFlipX(sprite.flipX);
+      this.actorSprite.setTexture('player-side-approved', sprite.frame).setFlipX(sprite.flipX).setOrigin(.5,1);
       this.actorSprite.setDisplaySize(PLAYER_DISPLAY_WIDTH[this.facing], PLAYER_DISPLAY_HEIGHT).setPosition(sprite.offsetX, 4).setAngle(0);
+      return;
+    }
+    if (this.walking && (this.facing==='front'||this.facing==='back')) {
+      const pose=getVerticalWalkRow(this.gaitDistance)===1?'a':'b';
+      const model=getPlayerVerticalRuntimeModel(this.facing,pose);
+      this.actorSprite.setTexture(model.textureKey,model.frameName).setFlipX(false).setOrigin(.5,1)
+        .setScale(model.scale).setPosition(model.offsetX,model.offsetY).setAngle(0);
       return;
     }
     const col = ({ front: 0, left: 1, right: 2, back: 3 } as const)[this.facing];
     const row = this.walking
       ? getVerticalWalkRow(this.gaitDistance)
       : (Math.floor(this.time.now / 220) % 19 === 0 ? 3 : 0);
-    this.actorSprite.setTexture('player-walk-cycle', row * 4 + col).setFlipX(false)
+    this.actorSprite.setTexture('player-walk-cycle', row * 4 + col).setFlipX(false).setOrigin(.5,1)
       .setDisplaySize(PLAYER_DISPLAY_WIDTH[this.facing], PLAYER_DISPLAY_HEIGHT).setPosition(0, 0).setAngle(0);
   }
 
@@ -1322,7 +1308,6 @@ export class WorldScene extends Phaser.Scene {
     if (!this.portalUnlocked(portal)) { this.showToast(this.lockMessage(portal)); return; }
     this.clearSemiAutoArrow();
     this.stopNavigation();
-    this.clearPointerAim();
     this.transitioning = true;
     this.areaPositions.set(this.area, { x: this.player.x, y: this.player.y });
     this.cameras.main.fadeOut(380, 5, 11, 18);
@@ -1562,7 +1547,7 @@ export class WorldScene extends Phaser.Scene {
     this.mapLayerUi?.destroy(true); this.mapLayerUi = null;
     this.clearSemiAutoArrow();
     this.areaPositions.set(this.area, { x: this.player.x, y: this.player.y });
-    this.stopNavigation(); this.clearPointerAim();
+    this.stopNavigation();
     this.transitioning = true;
     this.cameras.main.fadeOut(300, 5, 11, 18);
     this.cameras.main.once(Phaser.Cameras.Scene2D.Events.FADE_OUT_COMPLETE, () => {
@@ -1962,7 +1947,9 @@ export class WorldScene extends Phaser.Scene {
     layer.add(this.add.rectangle(WIDTH / 2, HEIGHT / 2, 1050, 760, 0x102a37, .98).setStrokeStyle(3, 0xe9c66f));
     this.addButton(layer, 1200, 125, 220, '關閉檔案', () => this.closeCompanionPanel(), true);
     const form = getCompanionGrowthStage(this.companionProgress.fed);
-    const portrait = this.add.image(460, 620, this.selectedSpirit !== 'xiezhi' ? 'world-' + this.selectedSpirit + '-' + form.id : form.id === 'young' ? 'xiezhi-sprites' : `companion-${form.id}`, 0).setDisplaySize(form.id === 'young' ? 230 : 300, this.selectedSpirit === 'xiezhi' && form.id === 'young' ? 230 : (form.id === 'young' ? 230 : 300) * 724 / 543).setOrigin(.5, 1);
+    const portrait=this.add.sprite(460,620,`world-${this.selectedSpirit}-${form.id}`,0);
+    applySpiritDirection(portrait,this.selectedSpirit,this.spiritProgress[this.selectedSpirit].fed,'front',false,0);
+    portrait.setScale(portrait.scaleX*2.2,portrait.scaleY*2.2);
     if (!this.ownsSpirit(this.selectedSpirit)) portrait.setTexture('fruit-' + this.selectedSpirit).setDisplaySize(150,150).setY(510);
     layer.add(portrait);
     this.quizTimer = localizedText(this, 800, 592, '', {fontSize:'16px',color:'#e9c66f'}).setOrigin(.5);
@@ -2084,7 +2071,11 @@ export class WorldScene extends Phaser.Scene {
       const owned = this.ownsSpirit(spirit.id), p = this.spiritProgress[spirit.id];
       const stage = getCompanionGrowthStage(p.fed);
       layer.add(this.add.rectangle(x, y, 330, 196, owned ? 0x193b48 : 0x142530).setStrokeStyle(2, owned ? 0xe9c66f : 0x47616a));
-      if (owned) layer.add(this.add.image(x - 85, y + 48, spirit.id === 'xiezhi' ? stage.id === 'young' ? 'xiezhi-sprites' : `companion-${stage.id}` : `world-${spirit.id}-${stage.id}`, 0).setOrigin(.5, 1).setDisplaySize(85, spirit.id === 'xiezhi' && stage.id === 'young' ? 85 : 114));
+      if (owned) {
+        const portrait=this.add.sprite(x-85,y+48,`world-${spirit.id}-${stage.id}`,0);
+        applySpiritDirection(portrait,spirit.id,this.spiritProgress[spirit.id].fed,'front',false,0);
+        portrait.setScale(portrait.scaleX*.72,portrait.scaleY*.72);layer.add(portrait);
+      }
       else layer.add(localizedText(this, x - 85, y - 15, '?', { fontSize: '62px', color: '#627e82' }).setOrigin(.5));
       layer.add(localizedText(this, x + 42, y - 50, owned ? spiritNames[spirit.id] : `第${i + 1}幕獎勵`, { fontSize: '23px', color: owned ? '#ffe0a0' : '#9bb5b1' }).setOrigin(.5));
       layer.add(localizedText(this, x + 42, y - 6, owned ? spirit.virtue.hant : '尚未領取', { fontSize: '18px', color: '#c4dcd0' }).setOrigin(.5));
@@ -2143,7 +2134,6 @@ export class WorldScene extends Phaser.Scene {
 
   private onTouchAxis = (event: CustomEvent<{ x: number; y: number }>): void => {
     this.touchAxis.set(event.detail.x, event.detail.y);
-    if (this.touchAxis.length() > .05) this.clearPointerAim();
   };
 
   private onTouchAction = (event: CustomEvent<string>): void => {

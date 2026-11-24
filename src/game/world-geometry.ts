@@ -1,8 +1,12 @@
+import { convexHull, polygonsOverlap, rectPolygon, rectsOverlap, shapeOverlapsRect } from './polygon-geometry';
+
 export interface WorldRect {
   x: number;
   y: number;
   width: number;
   height: number;
+  /** Absolute world coordinates. The rectangle is its broad-phase bounding box. */
+  polygon?: readonly WorldPoint[];
 }
 
 export interface WorldPoint { x: number; y: number }
@@ -18,11 +22,23 @@ export function canOccupyWorldPosition(
   worldWidth: number,
   worldHeight: number,
 ): boolean {
-  if (x < WORLD_MARGIN || y < WORLD_MARGIN || x > worldWidth - WORLD_MARGIN || y > worldHeight - WORLD_MARGIN) return false;
-  return !blockers.some((block) =>
-    x + FEET_HALF_WIDTH > block.x && x - FEET_HALF_WIDTH < block.x + block.width &&
-    y + FEET_HALF_HEIGHT > block.y && y - FEET_HALF_HEIGHT < block.y + block.height,
-  );
+  if (!Number.isFinite(x) || !Number.isFinite(y) || x < WORLD_MARGIN || y < WORLD_MARGIN || x > worldWidth - WORLD_MARGIN || y > worldHeight - WORLD_MARGIN) return false;
+  return !blockers.some(block => shapeOverlapsRect(block, feetRect(x, y)));
+}
+
+function feetRect(x: number, y: number): WorldRect {
+  return { x: x - FEET_HALF_WIDTH, y: y - FEET_HALF_HEIGHT, width: FEET_HALF_WIDTH * 2, height: FEET_HALF_HEIGHT * 2 };
+}
+
+/** Exact continuous feet sweep, including polygon tips thinner than a sampling step. */
+export function isWorldSegmentClear(from: WorldPoint, to: WorldPoint, blockers: readonly WorldRect[], worldWidth: number, worldHeight: number): boolean {
+  if (!canOccupyWorldPosition(from.x, from.y, blockers, worldWidth, worldHeight) ||
+      !canOccupyWorldPosition(to.x, to.y, blockers, worldWidth, worldHeight)) return false;
+  const swept = { x: Math.min(from.x, to.x) - 16, y: Math.min(from.y, to.y) - 9,
+    width: Math.abs(to.x - from.x) + 32, height: Math.abs(to.y - from.y) + 18 };
+  if (from.x === to.x || from.y === to.y) return !blockers.some(block => shapeOverlapsRect(block, swept));
+  const hull = convexHull([...rectPolygon(feetRect(from.x, from.y)), ...rectPolygon(feetRect(to.x, to.y))]);
+  return !blockers.some(block => rectsOverlap(block, swept) && polygonsOverlap(block.polygon ?? rectPolygon(block), hull));
 }
 
 export function moveAlongWalkableAxes(
@@ -31,8 +47,10 @@ export function moveAlongWalkableAxes(
   nextX: number,
   nextY: number,
   canStand: (x: number, y: number) => boolean,
+  canTraverse?: (from: WorldPoint, to: WorldPoint) => boolean,
 ): WorldPoint & { moved: boolean } {
   const clearSegment = (fromX: number, fromY: number, toX: number, toY: number): boolean => {
+    if (canTraverse) return canTraverse({ x: fromX, y: fromY }, { x: toX, y: toY });
     const steps = Math.max(1, Math.ceil(Math.hypot(toX - fromX, toY - fromY) / 8));
     for (let index = 1; index <= steps; index += 1) {
       const ratio = index / steps;
@@ -58,13 +76,31 @@ export function getWallOcclusionAlpha(
   worldHeight = 1600,
 ): number {
   const behindWallEdge = blockers.some((block) => {
-    if (isMapBoundary(block, worldWidth, worldHeight)) return false;
+    // Polygon AABBs are broad-phase bounds, not drawable facade edges.
+    // Polygon maps use getOcclusion with their separate visual masks instead.
+    if (block.polygon || isMapBoundary(block, worldWidth, worldHeight)) return false;
     // The feet stay on the road; only the upper body projects across a side edge.
     const besideSideEdge = (x < block.x && x + 52 > block.x) ||
       (x > block.x + block.width && x - 52 < block.x + block.width);
     return besideSideEdge && y >= block.y && y <= block.y + block.height;
   });
   return behindWallEdge ? 0.52 : 1;
+}
+
+export interface WorldOcclusion {
+  occluderIndices: number[];
+  occluderAlpha: number;
+  playerAlpha: 1;
+}
+
+/** For the renderer: fade intersecting ROOF overlays, never feet collision or the actor.
+ * Defaults match the current 180px actor height; pass actual sprite bounds if changed.
+ * Occluder indices refer to DistrictMap.occluders in stable array order.
+ */
+export function getOcclusion(x: number, y: number, occluders: readonly WorldRect[], actorHeight = 180, actorHalfWidth = 52): WorldOcclusion {
+  const body = { x: x - actorHalfWidth, y: y - actorHeight, width: actorHalfWidth * 2, height: actorHeight };
+  const occluderIndices = occluders.flatMap((shape, index) => shapeOverlapsRect(shape, body) ? [index] : []);
+  return { occluderIndices, occluderAlpha: occluderIndices.length ? .35 : 1, playerAlpha: 1 };
 }
 
 export function findWorldPath(
@@ -75,64 +111,81 @@ export function findWorldPath(
   worldHeight: number,
   cellSize = 48,
 ): WorldPoint[] | null {
-  const columns = Math.ceil(worldWidth / cellSize);
-  const rows = Math.ceil(worldHeight / cellSize);
-  const cellIndex = (column: number, row: number) => row * columns + column;
-  const cellCenter = (index: number): WorldPoint => ({
-    x: (index % columns + 0.5) * cellSize,
-    y: (Math.floor(index / columns) + 0.5) * cellSize,
-  });
-  const nearestFreeCell = (point: WorldPoint): number => {
-    let chosen = -1;
-    let bestDistance = Number.POSITIVE_INFINITY;
-    for (let row = 0; row < rows; row += 1) for (let column = 0; column < columns; column += 1) {
-      const index = cellIndex(column, row);
-      const center = cellCenter(index);
-      const distance = (center.x - point.x) ** 2 + (center.y - point.y) ** 2;
-      if (distance < bestDistance && canOccupyWorldPosition(center.x, center.y, blockers, worldWidth, worldHeight)) {
-        chosen = index;
-        bestDistance = distance;
+  if (!(cellSize > 0) || !Number.isFinite(cellSize) || !Number.isFinite(goalPoint.x) || !Number.isFinite(goalPoint.y) ||
+      !canOccupyWorldPosition(startPoint.x, startPoint.y, blockers, worldWidth, worldHeight)) return null;
+  const mesh = navigationMesh(blockers, worldWidth, worldHeight, cellSize);
+  const ordered = (point: WorldPoint): number[] => mesh.free.slice().sort((a, b) =>
+    Math.hypot(mesh.points[a].x - point.x, mesh.points[a].y - point.y) - Math.hypot(mesh.points[b].x - point.x, mesh.points[b].y - point.y));
+  // Explicit axis corners agree with the scene's X-then-Y collision movement.
+  const connector = (from: WorldPoint, to: WorldPoint): WorldPoint[] | null => {
+    for (const corner of [{ x: to.x, y: from.y }, { x: from.x, y: to.y }]) {
+      if (isWorldSegmentClear(from, corner, blockers, worldWidth, worldHeight) &&
+          isWorldSegmentClear(corner, to, blockers, worldWidth, worldHeight)) {
+        return [corner, to].filter((p, index, all) => p.x !== (index ? all[index - 1] : from).x || p.y !== (index ? all[index - 1] : from).y);
       }
     }
-    return chosen;
+    return null;
   };
-
-  const start = nearestFreeCell(startPoint);
-  const goal = nearestFreeCell({
-    x: Math.min(worldWidth - 40, Math.max(40, goalPoint.x)),
-    y: Math.min(worldHeight - 40, Math.max(40, goalPoint.y)),
-  });
-  if (start < 0 || goal < 0) return null;
-  const parents = new Int32Array(columns * rows).fill(-2);
-  const queue = new Int32Array(columns * rows);
+  if (Math.hypot(goalPoint.x - startPoint.x, goalPoint.y - startPoint.y) <= cellSize * 1.5) {
+    const direct = connector(startPoint, goalPoint);
+    if (direct) return direct.map(point => ({ ...point }));
+  }
+  let start = -1;
+  let entry: WorldPoint[] = [];
+  for (const candidate of ordered(startPoint)) {
+    const leg = connector(startPoint, mesh.points[candidate]);
+    if (leg) { start = candidate; entry = leg; break; }
+  }
+  if (start < 0) return null;
+  const parents = new Int32Array(mesh.points.length).fill(-2);
+  const queue = new Int32Array(mesh.points.length);
   let head = 0;
   let tail = 0;
   queue[tail++] = start;
   parents[start] = -1;
-  const directions = [[1, 0], [-1, 0], [0, 1], [0, -1]] as const;
-
-  while (head < tail && parents[goal] === -2) {
+  while (head < tail) {
     const current = queue[head++];
-    const column = current % columns;
-    const row = Math.floor(current / columns);
-    for (const [dx, dy] of directions) {
-      const nextColumn = column + dx;
-      const nextRow = row + dy;
-      if (nextColumn < 0 || nextRow < 0 || nextColumn >= columns || nextRow >= rows) continue;
-      const next = cellIndex(nextColumn, nextRow);
+    for (const next of mesh.links[current]) {
       if (parents[next] !== -2) continue;
-      const center = cellCenter(next);
-      if (!canOccupyWorldPosition(center.x, center.y, blockers, worldWidth, worldHeight)) continue;
       parents[next] = current;
       queue[tail++] = next;
-      if (next === goal) break;
     }
   }
 
-  if (parents[goal] === -2) return null;
+  const exactGoal = canOccupyWorldPosition(goalPoint.x, goalPoint.y, blockers, worldWidth, worldHeight);
+  let goal = -1;
+  let exit: WorldPoint[] = [];
+  for (const candidate of ordered(goalPoint)) {
+    if (parents[candidate] === -2) continue;
+    const leg = exactGoal ? connector(mesh.points[candidate], goalPoint) : [];
+    if (leg) { goal = candidate; exit = leg; break; }
+  }
+  if (goal < 0) return null;
   const reversed: WorldPoint[] = [];
-  for (let current = goal; current !== start && current >= 0; current = parents[current]) reversed.push(cellCenter(current));
-  return reversed.reverse();
+  for (let current = goal; current !== start && current >= 0; current = parents[current]) reversed.push(mesh.points[current]);
+  // Callers may mutate waypoints; never expose mesh points or input target objects.
+  return [...entry, ...reversed.reverse(), ...exit].map(point => ({ ...point }));
+}
+
+interface NavigationMesh { signature: string; points: WorldPoint[]; free: number[]; links: number[][] }
+const meshes = new WeakMap<readonly WorldRect[], NavigationMesh>();
+
+function navigationMesh(blockers: readonly WorldRect[], width: number, height: number, cell: number): NavigationMesh {
+  // Include values, not just identity: editing polygons in place must invalidate the mesh.
+  const signature = JSON.stringify([width, height, cell, blockers]);
+  const cached = meshes.get(blockers);
+  if (cached?.signature === signature) return cached;
+  const columns = Math.ceil(width / cell), rows = Math.ceil(height / cell);
+  const points = Array.from({ length: columns * rows }, (_, i) => ({ x: (i % columns + .5) * cell, y: (Math.floor(i / columns) + .5) * cell }));
+  const free = points.flatMap((p, i) => canOccupyWorldPosition(p.x, p.y, blockers, width, height) ? [i] : []);
+  const legal = new Set(free);
+  const links: number[][] = points.map(() => []);
+  for (const i of free) for (const j of [i % columns + 1 < columns ? i + 1 : -1, i + columns < points.length ? i + columns : -1]) {
+    if (legal.has(j) && isWorldSegmentClear(points[i], points[j], blockers, width, height)) { links[i].push(j); links[j].push(i); }
+  }
+  const result = { signature, points, free, links };
+  meshes.set(blockers, result);
+  return result;
 }
 
 export function getFeetDepth(feetY: number): number {

@@ -1,4 +1,6 @@
 import type { CopyKey } from './localization';
+import type { WorldRect } from './world-geometry';
+import { oldTownFootprints, oldTownOccluders } from './old-town-geometry';
 
 export const DISTRICT_WIDTH = 2400;
 export const DISTRICT_HEIGHT = 1600;
@@ -6,7 +8,7 @@ export const DISTRICT_HEIGHT = 1600;
 export type RegionId = 'hq' | 'oldTown' | 'campus' | 'harbor' | 'hill';
 
 export interface Point { x: number; y: number }
-export interface WorldBlocker { x: number; y: number; width: number; height: number }
+export interface WorldBlocker extends WorldRect {}
 export interface WorldPortal {
   x: number;
   y: number;
@@ -23,6 +25,8 @@ export interface DistrictMap {
   overview: Point;
   portals: WorldPortal[];
   blockers: WorldBlocker[];
+  /** Visual roof/eave masks. Never feed these to feet collision or navigation. */
+  occluders?: WorldRect[];
 }
 
 export const districtMaps: Record<RegionId, DistrictMap> = {
@@ -38,7 +42,8 @@ export const districtMaps: Record<RegionId, DistrictMap> = {
       { x: 1450, y: 550, width: 180, height: 100, target: 'campus', spawn: { x: 1200, y: 1080 }, unlock: 'informant' },
       { x: 1410, y: 1400, width: 180, height: 100, target: 'harbor', spawn: { x: 2180, y: 800 }, unlock: 'informant' },
     ],
-    blockers: [{ x: 0, y: 0, width: 680, height: 470 }, { x: 650, y: 0, width: 1020, height: 440 }, { x: 1650, y: 0, width: 750, height: 470 }, { x: 0, y: 460, width: 420, height: 450 }, { x: 0, y: 910, width: 330, height: 480 }, { x: 520, y: 660, width: 710, height: 920 }, { x: 1750, y: 780, width: 650, height: 800 }, { x: 0, y: 1390, width: 400, height: 186 }, { x: 0, y: 0, width: DISTRICT_WIDTH, height: 24 }, { x: 0, y: 0, width: 24, height: DISTRICT_HEIGHT }, { x: DISTRICT_WIDTH - 24, y: 0, width: 24, height: DISTRICT_HEIGHT }, { x: 0, y: DISTRICT_HEIGHT - 24, width: DISTRICT_WIDTH, height: 24 }],
+    blockers: [...oldTownFootprints, { x: 0, y: 0, width: DISTRICT_WIDTH, height: 24 }, { x: 0, y: 0, width: 24, height: DISTRICT_HEIGHT }, { x: DISTRICT_WIDTH - 24, y: 0, width: 24, height: DISTRICT_HEIGHT }, { x: 0, y: DISTRICT_HEIGHT - 24, width: DISTRICT_WIDTH, height: 24 }],
+    occluders: oldTownOccluders,
   },
   campus: {
     id: 'campus', label: 'districtCampus', spawn: { x: 1200, y: 1080 }, overview: { x: 200, y: 255 },

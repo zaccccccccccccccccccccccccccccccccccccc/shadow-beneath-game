@@ -19,19 +19,21 @@ import xuanwuGrowing from '../assets/spirit-xuanwu-growing-walk.png';
 import xuanwuGuardian from '../assets/spirit-xuanwu-guardian-walk.png';
 import { getLocale, localizedText } from './localization';
 import { getSpirit, spirits, type SpiritGrowthId, type SpiritId } from './spirits';
-import { getWalkLabSpriteHeight } from './spirit-walk-lab';
+import type { PlayerFacing } from './player-animation';
+import { loadSpiritDirections, prepareSpiritDirections, applySpiritDirection } from './spirit-art';
+import { trackSceneLoading, sceneAssetsFailed } from './scene-loading';
 
 const WIDTH = 1600;
 const HEIGHT = 900;
 const FRAME_WIDTH = 543;
 const FRAME_HEIGHT = 724;
 const WALK_TEXTURES: Record<SpiritId, Record<SpiritGrowthId, string>> = {
-  xiezhi: { young: 'lab-xiezhi-young', growing: 'lab-xiezhi-growing', guardian: 'lab-xiezhi-guardian' },
-  baize: { young: 'lab-baize-young', growing: 'lab-baize-growing', guardian: 'lab-baize-guardian' },
-  pixiu: { young: 'lab-pixiu-young', growing: 'lab-pixiu-growing', guardian: 'lab-pixiu-guardian' },
-  qilin: { young: 'lab-qilin-young', growing: 'lab-qilin-growing', guardian: 'lab-qilin-guardian' },
-  xuanwu: { young: 'lab-xuanwu-young', growing: 'lab-xuanwu-growing', guardian: 'lab-xuanwu-guardian' },
-  qinglong: { young: 'lab-qinglong-young', growing: 'lab-qinglong-growing', guardian: 'lab-qinglong-guardian' },
+  xiezhi: { young: 'world-xiezhi-young', growing: 'world-xiezhi-growing', guardian: 'world-xiezhi-guardian' },
+  baize: { young: 'world-baize-young', growing: 'world-baize-growing', guardian: 'world-baize-guardian' },
+  pixiu: { young: 'world-pixiu-young', growing: 'world-pixiu-growing', guardian: 'world-pixiu-guardian' },
+  qilin: { young: 'world-qilin-young', growing: 'world-qilin-growing', guardian: 'world-qilin-guardian' },
+  xuanwu: { young: 'world-xuanwu-young', growing: 'world-xuanwu-growing', guardian: 'world-xuanwu-guardian' },
+  qinglong: { young: 'world-qinglong-young', growing: 'world-qinglong-growing', guardian: 'world-qinglong-guardian' },
 };
 const WALK_ASSETS: Record<SpiritId, Record<SpiritGrowthId, string>> = {
   xiezhi: { young: xiezhiYoung, growing: xiezhiGrowing, guardian: xiezhiGuardian },
@@ -41,64 +43,109 @@ const WALK_ASSETS: Record<SpiritId, Record<SpiritGrowthId, string>> = {
   xuanwu: { young: xuanwuYoung, growing: xuanwuGrowing, guardian: xuanwuGuardian },
   qinglong: { young: qinglongYoung, growing: qinglongGrowing, guardian: qinglongGuardian },
 };
-const STAGES: SpiritGrowthId[] = ['young', 'growing', 'guardian'];
-
+const STAGES = ['young', 'growing', 'guardian'] as const;
+const FED: Record<SpiritGrowthId, number> = { young: 0, growing: 3, guardian: 6 };
+const FACINGS: PlayerFacing[] = ['back', 'front', 'left', 'right'];
+// Same uniform multiplier on both axes; tallest side cell = 109.23px.
+const LAB_SCALE = .64;
+const LANE_TOP = 166, LANE_STRIDE = 118, FOOT_OFFSET = 112;
+const CENTER_X = 660, LABEL_X = 1180, WALK_SPEED = 96, CYCLE_DISTANCE = 192;
 interface Runner {
   id: SpiritId;
-  image: Phaser.GameObjects.Image;
+  sprite: Phaser.GameObjects.Sprite;
   shadow: Phaser.GameObjects.Ellipse;
   label: Phaser.GameObjects.Text;
-  x: number;
-  direction: 1 | -1;
-  speed: number;
 }
 
 export class SpiritWalkLabScene extends Phaser.Scene {
   private runners: Runner[] = [];
   private stage: SpiritGrowthId = 'young';
+  private facing: PlayerFacing = 'front';
   private running = true;
-  private elapsed = 0;
+  private stationary = true;
+  private showIdle = false;
+  private distance = 0;
+  private initialized = false;
+  private preloadError = false;
   private status!: Phaser.GameObjects.Text;
   private controlLayer!: Phaser.GameObjects.Container;
-  private frameIndex = 0;
-  private leftKey!: Phaser.Input.Keyboard.Key;
-  private rightKey!: Phaser.Input.Keyboard.Key;
-
   constructor() { super('spirit-walk-lab'); }
 
   preload(): void {
-    spirits.forEach((spirit) => STAGES.forEach((stage) => {
-      this.load.spritesheet(WALK_TEXTURES[spirit.id][stage], WALK_ASSETS[spirit.id][stage], { frameWidth: FRAME_WIDTH, frameHeight: FRAME_HEIGHT });
-    }));
+    trackSceneLoading(this);
+    this.preloadError = false;
+    try { loadSpiritDirections(this); } catch (error) {
+      this.preloadError = true;
+      this.reportLoadError(error);
+      return;
+    }
+    for (const spirit of spirits) for (const stage of STAGES) {
+      const key = WALK_TEXTURES[spirit.id][stage];
+      // The shared module also queues xiezhi sides. All 18 keys stay world-id-stage.
+      const queued = Array.from(this.load.list).some(file => file.key === key);
+      if (!this.textures.exists(key) && !queued) this.load.spritesheet(key, WALK_ASSETS[spirit.id][stage], { frameWidth: FRAME_WIDTH, frameHeight: FRAME_HEIGHT });
+    }
   }
 
   create(): void {
+    this.initialized = false;
+    if (this.preloadError || sceneAssetsFailed(this)) return;
+    this.runners = [];
+    this.stage = 'young'; this.facing = 'front'; this.running = true;
+    this.stationary = true; this.showIdle = false; this.distance = 0;
+    document.body.dataset.bootStage = 'spirit-walk-lab-create';
+    try {
+      prepareSpiritDirections(this);
+      this.add.rectangle(WIDTH / 2, HEIGHT / 2, WIDTH, HEIGHT, 0x0c1722);
+      this.add.rectangle(WIDTH / 2, 79, WIDTH, 158, 0x102a37).setStrokeStyle(2, 0xe9c66f);
+      const hans = getLocale() === 'zh-Hans';
+      localizedText(this, 36, 16, hans ? '六灵兽 · 四方向步态实验室' : '六靈獸 · 四方向步態實驗室', { fontSize: '27px', color: '#fff0cf', fontStyle: 'bold' });
+      this.status = localizedText(this, 36, 53, '', { fontSize: '16px', color: '#a6d7ba' });
+      localizedText(this, 36, 140, hans
+        ? '↑↓←→ / WASD：方向 · 1/2/3：形态 · Space：暂停 · [ / ]：逐帧 · I：站立 · M：定点/位移 · Esc：返回'
+        : '↑↓←→ / WASD：方向 · 1/2/3：形態 · Space：暫停 · [ / ]：逐格 · I：站立 · M：定點/位移 · Esc：返回', { fontSize: '13px', color: '#accac8' });
+      this.controlLayer = this.add.container(0, 0).setDepth(20);
+      spirits.forEach((spirit, lane) => {
+        const top = LANE_TOP + lane * LANE_STRIDE, feetY = top + FOOT_OFFSET;
+        this.add.rectangle(WIDTH / 2, top + 56, 1480, 114, lane % 2 ? 0x122531 : 0x10212d, .92).setStrokeStyle(1, 0x405e62);
+        this.add.graphics().lineStyle(1, 0x7aa89a, .35).lineBetween(90, feetY, 1110, feetY);
+        const shadow = this.add.ellipse(CENTER_X, feetY, 62, 9, 0x05080b, .42).setDepth(2);
+        const sprite = this.add.sprite(CENTER_X, feetY, WALK_TEXTURES[spirit.id].young, 0).setDepth(3);
+        const label = localizedText(this, LABEL_X, top + 30, '', { fontSize: '17px', color: '#fff0cf', lineSpacing: 7 }).setDepth(4);
+        this.runners.push({ id: spirit.id, sprite, shadow, label });
+      });
+      this.refresh();
+    } catch (error) {
+      this.reportLoadError(error);
+      return;
+    }
+    this.initialized = true;
     document.body.dataset.gameUi = 'world';
-    this.add.rectangle(WIDTH / 2, HEIGHT / 2, WIDTH, HEIGHT, 0x0c1722);
-    for (let row = 0; row < 6; row += 1) {
-      const y = 226 + row * 128;
-      this.add.rectangle(WIDTH / 2, y, 1480, 86, row % 2 ? 0x122531 : 0x10212d, .92).setStrokeStyle(1, 0x405e62);
-      this.add.graphics().lineStyle(2, 0x7aa89a, .32).lineBetween(60, y + 28, 1540, y + 28);
-    }
-    this.add.rectangle(WIDTH / 2, 62, WIDTH, 116, 0x102a37, .98).setStrokeStyle(2, 0xe9c66f);
-    const title = getLocale() === 'zh-Hans' ? '六灵兽步态实验室 · 18 组逐帧测试' : '六靈獸步態實驗室 · 18 組逐格測試';
-    this.add.text(44, 25, title, { fontFamily: 'Noto Sans TC, Noto Sans SC, sans-serif', fontSize: '28px', color: '#fff0cf', fontStyle: 'bold' });
-    this.status = localizedText(this, 44, 75, '', { fontSize: '16px', color: '#a6d7ba' });
-    this.controlLayer = this.add.container(0, 0).setDepth(20);
-    this.makeControls();
-    this.spawnRunners();
-    this.updateStatus();
-    this.input.keyboard?.on('keydown-SPACE', () => { this.running = !this.running; this.updateStatus(); this.makeControls(); });
-    if (this.input.keyboard) {
-      this.leftKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.LEFT);
-      this.rightKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.RIGHT);
-    }
-    this.input.keyboard?.on('keydown-ESC', () => window.location.reload());
+    const keyboard = this.input.keyboard;
+    keyboard?.addCapture('UP,DOWN,LEFT,RIGHT,SPACE');
+    keyboard?.on('keydown', this.onKeyDown, this);
+    // Hide the shared overlay only after decoded-frame setup AND a first render.
+    const announceReady = () => {
+      document.body.dataset.bootStage = 'spirit-walk-lab-ready';
+      window.dispatchEvent(new CustomEvent('under-shadow-preview-ready', { detail: { scene: 'spirit-walk-lab' } }));
+    };
+    this.game.events.once('postrender', announceReady);
+    this.events.once('shutdown', () => {
+      this.initialized = false;
+      keyboard?.off('keydown', this.onKeyDown, this);
+      this.game.events.off('postrender', announceReady);
+    });
   }
 
-  private button(x: number, label: string, action: () => void, selected = false, width = 145): void {
-    const box = this.add.rectangle(x, 61, width, 45, selected ? 0xe9c66f : 0x1e4954).setStrokeStyle(2, 0xffe7a2).setInteractive({ useHandCursor: true });
-    const text = localizedText(this, x, 61, label, { fontSize: '16px', color: selected ? '#19323d' : '#fff0cf', fontStyle: 'bold' }).setOrigin(.5);
+  private reportLoadError(error: unknown): void {
+    document.body.dataset.bootStage = 'spirit-walk-lab-failed';
+    window.dispatchEvent(new CustomEvent('under-shadow-load-error', { detail: { file: error instanceof Error ? error.message : String(error) } }));
+  }
+
+  private button(x: number, label: string, action: () => void, selected = false, width = 105): void {
+    const box = this.add.rectangle(x, 108, width, 40, selected ? 0xe9c66f : 0x1e4954)
+      .setStrokeStyle(2, 0xffe7a2).setInteractive({ useHandCursor: true });
+    const text = localizedText(this, x, 108, label, { fontSize: '15px', color: selected ? '#19323d' : '#fff0cf', fontStyle: 'bold' }).setOrigin(.5);
     box.on('pointerdown', action);
     this.controlLayer.add([box, text]);
   }
@@ -106,68 +153,80 @@ export class SpiritWalkLabScene extends Phaser.Scene {
   private makeControls(): void {
     this.controlLayer.removeAll(true);
     const hans = getLocale() === 'zh-Hans';
-    const stageLabels = hans ? ['幼体', '成长体', '守护体'] : ['幼體', '成長體', '守護體'];
-    STAGES.forEach((stage, index) => this.button(1010 + index * 155, stageLabels[index], () => {
-      this.stage = stage;
-      this.frameIndex = 0;
-      this.applyStage();
-    }, this.stage === stage));
-    this.button(1500, this.running ? (hans ? '暂停' : '暫停') : (hans ? '继续' : '繼續'), () => {
-      this.running = !this.running;
-      this.makeControls();
-      this.updateStatus();
-    }, false, 120);
+    const stageLabels = hans ? ['1 幼体', '2 成长体', '3 守护体'] : ['1 幼體', '2 成長體', '3 守護體'];
+    STAGES.forEach((stage, index) => this.button(100 + index * 125, stageLabels[index], () => this.selectStage(stage), this.stage === stage));
+    FACINGS.forEach((facing, index) => this.button(510 + index * 100, ['↑ 上', '↓ 下', '← 左', '→ 右'][index], () => this.selectFacing(facing), this.facing === facing, 88));
+    this.button(945, this.running ? (hans ? '暂停' : '暫停') : (hans ? '继续' : '繼續'), () => this.togglePause());
+    this.button(1060, hans ? '[ 前一帧' : '[ 前一格', () => this.step(-1));
+    this.button(1175, hans ? '] 后一帧' : '] 後一格', () => this.step(1));
+    this.button(1285, 'I 站立', () => this.idle(), this.showIdle, 95);
+    this.button(1440, this.stationary ? (hans ? 'M 定点行走' : 'M 定點行走') : 'M 沿方向位移', () => {
+      this.stationary = !this.stationary; this.refresh();
+    }, !this.stationary, 175);
   }
 
-  private spawnRunners(): void {
-    spirits.forEach((spirit, lane) => {
-      const y = 226 + lane * 128;
-      const shadow = this.add.ellipse(155, y + 29, 104, 18, 0x05080b, .42).setDepth(2);
-      const image = this.add.image(155, y + 30, WALK_TEXTURES[spirit.id][this.stage]).setOrigin(.5, 1).setDepth(3).setScale(getWalkLabSpriteHeight(this.stage) / FRAME_HEIGHT);
-      const label = localizedText(this, 78, y - 28, '', { fontSize: '16px', color: '#fff0cf', backgroundColor: '#102631', padding: { x: 8, y: 4 } }).setDepth(4);
-      this.runners.push({ id: spirit.id, image, shadow, label, x: 155, direction: 1, speed: 116 + lane * 12 });
-    });
-    this.applyStage();
+  private selectStage(stage: SpiritGrowthId): void { this.stage = stage; this.distance = 0; this.refresh(); }
+  private selectFacing(facing: PlayerFacing): void { this.facing = facing; this.distance = 0; this.refresh(); }
+  private togglePause(): void {
+    this.running = !this.running;
+    if (this.running) this.showIdle = false;
+    this.refresh();
+  }
+  private idle(): void { this.running = false; this.showIdle = true; this.distance = 0; this.refresh(); }
+  private step(direction: 1 | -1): void {
+    const wasIdle = this.showIdle;
+    this.running = false; this.showIdle = false;
+    const stride = this.facing === 'front' || this.facing === 'back' ? 96 : 48;
+    const count = CYCLE_DISTANCE / stride;
+    const current = wasIdle && direction > 0 ? -1 : Math.floor((this.distance % CYCLE_DISTANCE) / stride);
+    this.distance = ((current + direction + count) % count) * stride;
+    this.refresh();
   }
 
-  private applyStage(): void {
-    this.runners.forEach((runner) => {
-      runner.image.setTexture(WALK_TEXTURES[runner.id][this.stage]).setFrame(this.frameIndex).setCrop().setScale(getWalkLabSpriteHeight(this.stage) / FRAME_HEIGHT).setVisible(true);
-    });
-    this.updateStatus();
+  private onKeyDown(event: KeyboardEvent): void {
+    if (event.repeat) return;
+    const key = event.key.toLowerCase();
+    const directions: Record<string, PlayerFacing> = { arrowup: 'back', w: 'back', arrowdown: 'front', s: 'front', arrowleft: 'left', a: 'left', arrowright: 'right', d: 'right' };
+    if (directions[key]) { event.preventDefault(); this.selectFacing(directions[key]); return; }
+    if (key === ' ') { event.preventDefault(); this.togglePause(); }
+    else if (key === '[' || key === ',') this.step(-1);
+    else if (key === ']' || key === '.') this.step(1);
+    else if (key === '1' || key === '2' || key === '3') this.selectStage(STAGES[Number(key) - 1]);
+    else if (key === 'i') this.idle();
+    else if (key === 'm') { this.stationary = !this.stationary; this.refresh(); }
+    else if (key === 'escape') window.location.reload();
   }
 
-  private updateStatus(): void {
+  private refresh(): void { this.makeControls(); this.renderRunners(); }
+  private renderRunners(): void {
     const hans = getLocale() === 'zh-Hans';
-    const stageLabel = hans
-      ? ({ young: '幼体', growing: '成长体', guardian: '守护体' } as const)[this.stage]
-      : ({ young: '幼體', growing: '成長體', guardian: '守護體' } as const)[this.stage];
-    const state = this.running ? (hans ? '六只同时行走中' : '六隻同時行走中') : (hans ? '已暂停，可用 ← / → 逐帧检查' : '已暫停，可用 ← / → 逐格檢查');
-    this.status.setText(`${state}  ·  当前形态：${stageLabel}  ·  6 只 × 3 形态 = 18 组  ·  帧 ${this.frameIndex + 1}/4  ·  Space：暂停／继续`);
+    const directionLabel = ({ back: '↑ 上', front: '↓ 下', left: '← 左', right: '→ 右' } as const)[this.facing];
+    const vertical = this.facing === 'front' || this.facing === 'back', count = vertical ? 2 : 4;
+    const frame = Math.floor((this.distance % CYCLE_DISTANCE) / (CYCLE_DISTANCE / count));
+    const phase = this.showIdle ? 'idle 0' : `${frame + 1}/${count}`;
+    this.runners.forEach((runner, lane) => {
+      const feetY = LANE_TOP + lane * LANE_STRIDE + FOOT_OFFSET;
+      let x = CENTER_X, y = feetY;
+      if (!this.stationary) {
+        const range = vertical ? 8 : 680, offset = ((this.distance + range / 2) % range) - range / 2;
+        if (vertical) y += (this.facing === 'front' ? 1 : -1) * offset;
+        else x += (this.facing === 'right' ? 1 : -1) * offset;
+      }
+      // Pause keeps the walking pose frozen; only explicit idle passes false.
+      applySpiritDirection(runner.sprite, runner.id, FED[this.stage], this.facing, !this.showIdle, this.distance);
+      runner.sprite.setScale(runner.sprite.scaleX * LAB_SCALE, runner.sprite.scaleY * LAB_SCALE).setPosition(x, y).setAngle(0);
+      runner.shadow.setPosition(x, y);
+      const spirit = getSpirit(runner.id), form = spirit.forms[STAGES.indexOf(this.stage)];
+      runner.label.setText(`${hans ? spirit.name.hans : spirit.name.hant} · ${hans ? form.hans : form.hant}\n${directionLabel} · ${hans ? '步态' : '步態'} ${phase}`);
+    });
+    const stageLabel = (hans ? ['幼体', '成长体', '守护体'] : ['幼體', '成長體', '守護體'])[STAGES.indexOf(this.stage)];
+    const state = this.showIdle ? 'idle' : this.running ? '行走中' : (hans ? '已暂停，保留步态' : '已暫停，保留步態');
+    this.status.setText(`${state} · ${stageLabel} · ${directionLabel} · ${hans ? '相位' : '相位'} ${phase} · 6 × 3 ${hans ? '形态' : '形態'} × 4 方向 · ${this.stationary ? (hans ? '定点检查脚步' : '定點檢查腳步') : '有限 lane 位移'}`);
   }
 
   update(_: number, delta: number): void {
-    this.elapsed += delta;
-    if (this.leftKey && Phaser.Input.Keyboard.JustDown(this.leftKey)) { this.running = false; this.frameIndex = (this.frameIndex + 3) % 4; this.applyStage(); this.makeControls(); }
-    if (this.rightKey && Phaser.Input.Keyboard.JustDown(this.rightKey)) { this.running = false; this.frameIndex = (this.frameIndex + 1) % 4; this.applyStage(); this.makeControls(); }
-    if (this.running) this.frameIndex = Math.floor(this.elapsed / 200) % 4;
-    this.runners.forEach((runner, lane) => {
-      if (this.running) {
-        runner.x += runner.direction * runner.speed * delta / 1000;
-        if (runner.x > 1460 || runner.x < 145) { runner.direction *= -1; runner.x = Phaser.Math.Clamp(runner.x, 145, 1460); }
-        runner.image.setFrame(this.frameIndex);
-      }
-      const y = 226 + lane * 128;
-      runner.image.setPosition(runner.x, y + 30).setFlipX(runner.direction < 0).setAngle(0);
-      runner.shadow.setPosition(runner.x, y + 31);
-      const spirit = getSpirit(runner.id);
-      const form = spirit.forms[STAGES.indexOf(this.stage)];
-      const name = getLocale() === 'zh-Hans' ? spirit.name.hans : spirit.name.hant;
-      const formName = getLocale() === 'zh-Hans' ? form.hans : form.hant;
-      const phase = this.running ? `步态 ${this.frameIndex + 1}/4` : `检查帧 ${this.frameIndex + 1}/4`;
-      runner.label.setText(`${name} · ${formName} · ${phase}`);
-      runner.label.setX(Math.max(78, Math.min(1300, runner.x - 74)));
-    });
-    if (this.running) this.updateStatus();
+    if (!this.initialized || !this.running) return;
+    this.distance += Math.max(0, delta) * WALK_SPEED / 1000;
+    this.renderRunners();
   }
 }

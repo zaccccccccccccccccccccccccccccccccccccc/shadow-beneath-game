@@ -76,6 +76,8 @@ function applyLocale(): void {
   }
   const musicLabel = document.getElementById('music-label');
   if (musicLabel) musicLabel.textContent = locale === 'zh-Hans' ? '背景音乐' : '背景音樂';
+  if (retryLoading) retryLoading.textContent = locale === 'zh-Hans' ? '重新载入 · 保留存档' : '重新載入 · 保留存檔';
+  if (compatibleRenderer) compatibleRenderer.textContent = locale === 'zh-Hans' ? '使用兼容显示模式' : '使用相容顯示模式';
   const touchHelp = document.getElementById('touch-help');
   const petsButton = document.getElementById('mobile-pets');
   if (petsButton) petsButton.textContent = locale === 'zh-Hans' ? '精灵' : '精靈';
@@ -108,6 +110,7 @@ window.addEventListener('under-shadow-load-progress', (event) => {
   const detail = (event as CustomEvent<{ progress: number; label?: string; stage?: string }>).detail;
   lastLoadProgressAt = Date.now();
   if (initialLoadFailed) return;
+  document.body.dataset.gameUi = 'loading';
   if (!loadingOverlay || !loadingTitle || !loadingProgress || !loadingDetail) return;
   loadingOverlay.dataset.visible = 'true';
   loadingTitle.textContent = getLocale() === 'zh-Hans' ? (detail.stage === 'intro' ? '正在载入序幕' : '正在载入调查区域') : (detail.stage === 'intro' ? '正在載入序幕' : '正在載入調查區域');
@@ -127,6 +130,10 @@ window.addEventListener('under-shadow-load-error', (event) => {
   }
   const help = gate?.querySelector('#gate-help');
   if (!introReady && help) help.textContent = getLocale() === 'zh-Hans' ? `素材加载失败：${fileName}` : `素材載入失敗：${fileName}`;
+});
+window.addEventListener('under-shadow-preview-ready', () => {
+  document.body.dataset.gameUi = 'preview';
+  if (loadingOverlay) loadingOverlay.dataset.visible = 'false';
 });
 window.addEventListener('under-shadow-world-ready', () => {
   if (loadingOverlay) loadingOverlay.dataset.visible = 'false';
@@ -168,6 +175,8 @@ const begin = (resume = false) => {
 const beginWalkLab = () => {
   if (gameStarted) return;
   gameStarted = true;
+  lastLoadProgressAt = Date.now();
+  if (loadingOverlay) loadingOverlay.dataset.visible = 'true';
   document.body.dataset.gameUi = 'loading';
   setPlayerName(nameInput?.value ?? '');
   gate?.remove();
@@ -176,6 +185,8 @@ const beginWalkLab = () => {
 const beginCharacterGallery = () => {
   if (gameStarted) return;
   gameStarted = true;
+  lastLoadProgressAt = Date.now();
+  if (loadingOverlay) loadingOverlay.dataset.visible = 'true';
   document.body.dataset.gameUi = 'loading';
   gate?.remove();
   startGame('gallery');

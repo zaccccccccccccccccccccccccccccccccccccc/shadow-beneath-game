@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { trackSceneLoading, sceneAssetsFailed } from './scene-loading';
 import { CHARACTER_DOSSIER, PORTRAIT_FRAMES } from './character-dossier';
 import { getLocale } from './localization';
 
@@ -10,10 +11,12 @@ export class CharacterGalleryScene extends Phaser.Scene {
   constructor() { super('character-gallery'); }
 
   preload(): void {
+    trackSceneLoading(this);
     for (const character of CHARACTER_DOSSIER) this.load.spritesheet(character.texture, character.image, { frameWidth: 724, frameHeight: 724 });
   }
 
   create(): void {
+    if (sceneAssetsFailed(this)) { this.scene.pause(); return; }
     const hans = getLocale() === 'zh-Hans';
     this.add.rectangle(WIDTH / 2, HEIGHT / 2, WIDTH, HEIGHT, 0x101a28);
     this.add.rectangle(WIDTH / 2, HEIGHT / 2, WIDTH - 36, HEIGHT - 36, 0x122b38, 0.96).setStrokeStyle(2, 0x7c9c93);
@@ -51,5 +54,6 @@ export class CharacterGalleryScene extends Phaser.Scene {
     this.add.text(back.x, back.y, backLabel, { fontFamily: 'Noto Sans TC, Noto Sans SC, sans-serif', fontSize: '17px', color: '#19323d', fontStyle: 'bold' }).setOrigin(.5);
     back.on('pointerdown', () => window.location.reload());
     this.cameras.main.fadeIn(280, 8, 18, 26);
+    window.dispatchEvent(new CustomEvent('under-shadow-preview-ready'));
   }
 }

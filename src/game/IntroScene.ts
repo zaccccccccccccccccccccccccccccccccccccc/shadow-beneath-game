@@ -32,7 +32,7 @@ export class IntroScene extends Phaser.Scene {
   }
 
   create(): void {
-    if (sceneAssetsFailed(this)) return;
+    if (sceneAssetsFailed(this)) { this.scene.pause(); return; }
     document.body.dataset.bootStage = 'intro-create';
     this.index = 0;
     this.transitioning = false;

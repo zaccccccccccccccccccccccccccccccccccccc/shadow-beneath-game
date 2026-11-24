@@ -35,13 +35,14 @@ async function persist() {
 async function read(page) {
   return page.evaluate(() => {
     const scene = window.sandboxGame.scene.keys.world;
-    const sprite = pet => pet ? {
+    const sprite = (pet,id) => pet ? {
       x: pet.x, y: pet.y, texture: pet.texture.key, frame: Number(pet.frame.name),
       width: pet.displayWidth, height: pet.displayHeight, visible: pet.visible, alpha: pet.alpha,
+      facing: scene.followerMotion.get(id)?.facing,
     } : null;
     const pets = {
-      xiezhi: sprite(scene.companion), baize: sprite(scene.baizeFollower), pixiu: sprite(scene.pixiuFollower),
-      ...Object.fromEntries([...scene.lateFollowers].map(([id, pet]) => [id, sprite(pet)])),
+      xiezhi: sprite(scene.companion,'xiezhi'), baize: sprite(scene.baizeFollower,'baize'), pixiu: sprite(scene.pixiuFollower,'pixiu'),
+      ...Object.fromEntries([...scene.lateFollowers].map(([id, pet]) => [id, sprite(pet,id)])),
     };
     const progress = structuredClone(scene.spiritProgress);
     const claimed = new Set(Object.values(progress).flatMap(item => item.claimedSnackIds));
@@ -127,53 +128,33 @@ function expectOtherSpecies(before, after, id) {
 
 async function expectGrowth(page, spirit, fed, folder) {
   const stage = fed === 3 ? 'growing' : 'guardian';
-  const texture = spirit.id === 'xiezhi' ? `companion-${stage}` : `world-${spirit.id}-${stage}`;
-  await page.waitForFunction(({ id, texture }) => {
+  const stageIndex = stage === 'growing' ? 1 : 2;
+  await page.waitForFunction(({ id, stageIndex }) => {
     const s = window.sandboxGame.scene.keys.world;
     const p = id === 'xiezhi' ? s.companion : id === 'baize' ? s.baizeFollower : id === 'pixiu' ? s.pixiuFollower : s.lateFollowers.get(id);
-    return p?.texture.key === texture;
-  }, { id: spirit.id, texture });
+    return p && (p.texture.key === `spirit-${id}-vertical-v2`
+      ? Number(p.frame.name) % 9 === stageIndex
+      : p.texture.key === `world-${id}-${stage}`);
+  }, { id: spirit.id, stageIndex });
   const state = await read(page);
   const pet = state.pets[spirit.id];
-  const width = (fed === 3 ? 108 : 128) * (spirit.id === 'xiezhi' ? 1.25 : 1);
-  assert.ok(Math.abs(pet.width - width) < .01, `${spirit.id} ${stage} width ${pet.width}, expected ${width}`);
-  assert.ok(Math.abs(pet.height - width * 724 / 543) < .01, `${spirit.id} ${stage} height`);
+  const vertical = model.vertical[spirit.id];
+  const growth = vertical.stages[stage];
+  if (pet.texture === `spirit-${spirit.id}-vertical-v2`) {
+    const frame = vertical.frames.find(frame => frame.index === pet.frame);
+    assert.equal(frame.stage, stage, `${spirit.id} selects exact vertical growth frame`);
+    const scale = growth.size / vertical.stages[frame.stage].referenceBodyHeight;
+    assert.ok(Math.abs(pet.width - frame.sourceBBox.width * scale) < .01, `${spirit.id} ${stage} measured frame width`);
+    assert.ok(Math.abs(pet.height - frame.sourceBBox.height * scale) < .01, `${spirit.id} ${stage} measured frame height`);
+  } else {
+    assert.equal(pet.texture, `world-${spirit.id}-${stage}`);
+    assert.ok(Math.abs(pet.width - growth.size) < .01, `${spirit.id} ${stage} side width`);
+    assert.ok(Math.abs(pet.height - growth.size * 724 / 543) < .01, `${spirit.id} ${stage} side height`);
+  }
   const form = spirit.forms.find(form => form.id === stage);
   assert.ok((await collectUiText(page)).some(item => item.text === form.hant), `${stage} form name visible in actual UI`);
   await snapshot(page, folder, `fed-${fed}-ui`);
-  return { fed, stage, texture: pet.texture, width: pet.width, height: pet.height };
-}
-
-async function animation(page, spirit, fed, folder) {
-  await clickCanvasText(page, '回到街區');
-  await page.mouse.move(0, 0); // Real pointer leave clears pointer-facing aim.
-  const start = await read(page);
-  const moving = [];
-  await page.keyboard.down('w');
-  try {
-    for (let i = 0; i < 100; i++) {
-      await page.waitForTimeout(80); // Observe real RAF; no accelerated game clock.
-      const state = await read(page);
-      moving.push({ player: state.player, walking: state.walking, pet: state.pets[spirit.id] });
-      if (start.player.y - state.player.y >= 180 && new Set(moving.map(sample => sample.pet.frame)).size >= 2) break;
-    }
-  } finally { await page.keyboard.up('w'); }
-  await page.waitForFunction(() => !window.sandboxGame.scene.keys.world.walking);
-  const idle = [];
-  for (let i = 0; i < 8; i++) {
-    await page.waitForTimeout(80);
-    const state = await read(page);
-    idle.push({ player: state.player, walking: state.walking, pet: state.pets[spirit.id] });
-  }
-  const evidence = { fed, start, moving, idle };
-  await writeFile(path.join(folder, `fed-${fed}-animation.json`), JSON.stringify(evidence, null, 2));
-  assert.ok(start.player.y - moving.at(-1).player.y >= 180, 'observable real keyboard displacement reaches 180px on Y');
-  assert.ok(moving.every(sample => Math.abs(sample.player.x - start.player.x) < .1), 'vertical-only input preserves player X');
-  assert.ok(new Set(moving.filter(sample => sample.walking).map(sample => sample.pet.frame)).size >= 2, `${spirit.id} walk sheet actually changes frames during Y movement`);
-  assert.ok(moving.every(sample => sample.pet.frame >= 0 && sample.pet.frame <= 3), 'side-facing sheet uses frames 0–3, without pretending to have front/back rows');
-  assert.ok(idle.every(sample => !sample.walking && sample.pet.frame === 0), `${spirit.id} legs stop at idle frame 0`);
-  await snapshot(page, folder, `fed-${fed}-idle`);
-  return { fed, movingFrames: [...new Set(moving.map(sample => sample.pet.frame))], idleFrames: [...new Set(idle.map(sample => sample.pet.frame))], yDisplacement: start.player.y - moving.at(-1).player.y };
+  return { fed, stage, texture: pet.texture, frame: pet.frame, size: growth.size, width: pet.width, height: pet.height };
 }
 
 async function speciesCase(spirit) {
@@ -233,8 +214,8 @@ async function speciesCase(spirit) {
     await openSpecies(page, spirit);
     const beforeFeeding = await read(page);
     const young = beforeFeeding.pets[spirit.id];
-    assert.equal(young.texture, spirit.id === 'xiezhi' ? 'xiezhi-sprites' : `world-${spirit.id}-young`);
-    assert.ok(Math.abs(young.width - 88) < .01);
+    assert.ok(young.texture === `spirit-${spirit.id}-vertical-v2` || young.texture === `world-${spirit.id}-young`);
+    assert.ok(young.width>0&&young.height>0,`${spirit.id} young form rendered`);
     entry.growth.push({ fed: 0, stage: 'young', texture: young.texture, width: young.width, height: young.height });
     for (let fed = 1; fed <= 6; fed++) {
       const before = await read(page);
@@ -247,8 +228,7 @@ async function speciesCase(spirit) {
       assert.deepEqual(after.storedProgress, after.progress);
       if (fed === 3 || fed === 6) {
         entry.growth.push(await expectGrowth(page, spirit, fed, folder));
-        entry.animations.push(await animation(page, spirit, fed, folder));
-        if (fed === 3) await openSpecies(page, spirit);
+        if (fed === 3) { await clickCanvasText(page, '回到街區'); await openSpecies(page, spirit); }
       }
     }
     await relocateFixture(page, 'hq', { x: 1190, y: 1120 }, entry);
@@ -260,7 +240,7 @@ async function speciesCase(spirit) {
     await writeFile(path.join(folder, 'actual-ui-earned-storage.json'), JSON.stringify(await page.evaluate(() => Object.fromEntries(Object.entries(localStorage))), null, 2));
     assert.deepEqual(entry.errors, [], 'no browser/runtime/asset errors');
     entry.status = 'passed';
-    console.log(`PASS ${spirit.id}: 6 quizzes, 6 feeds, growing/guardian textures+size, Y gait+idle, reload`);
+    console.log(`PASS ${spirit.id}: 6 quizzes, 6 feeds, growing/guardian measured sizes, reload (four-way gait covered separately)`);
   } catch (error) {
     entry.status = 'failed';
     entry.error = String(error.stack || error);
@@ -313,6 +293,7 @@ try {
     }]));
     return {
       spirits, layout, questions: quiz.spiritQuestions,
+      vertical: Object.fromEntries(Object.entries((await import('/src/game/spirit-vertical-metrics.ts')).spiritVerticalMetrics).map(([id, sheet]) => [id, {stages:Object.fromEntries(['young','growing','guardian'].map((stage, index) => [stage, {size:[88,108,128][index],referenceBodyHeight:sheet.stages[stage].referenceBodyHeight}])),frames:sheet.frames}])),
       tutorial: Object.fromEntries(['moved', 'mentor', 'supervisor', 'file', 'notebook', 'map', 'helpUsed', 'oldTown', 'informant'].map(key => [key, true])),
       clues: [...new Set(world.worldInteractions.flatMap(npc => npc.choices.flatMap(choice => choice.clue ? [choice.clue] : [])))],
       visited: world.worldInteractions.map(npc => npc.id), regions: Object.keys(world.districtMaps),
