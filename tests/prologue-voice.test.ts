@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createBrowserPrologueSpeech, createProloguePlayback, prologueReadingMs, type PrologueSpeech } from '../src/game/prologue-voice';
+import { createBrowserPrologueSpeech, createProloguePlayback, prologueReadingMs, selectPrologueVoices, type PrologueSpeech } from '../src/game/prologue-voice';
 import { IntroScene } from '../src/game/IntroScene';
+import { prologueCards } from '../src/game/scene-flow';
+import { prologueCopy, setLocale } from '../src/game/localization';
 
 // Only the rendering engine is replaced; exercise the actual scene's transition guards.
 vi.mock('phaser', () => ({ default: {
@@ -17,6 +19,12 @@ function setup(speech?: PrologueSpeech) {
 }
 
 describe('prologue playback', () => {
+  it('passes the optional character through without changing the spoken text', () => {
+    const speak = vi.fn();
+    const { playback } = setup({ speak, cancel: () => {} });
+    playback.play('先聽，再核對。', true, 'rong-jie');
+    expect(speak).toHaveBeenCalledWith('先聽，再核對。', expect.any(Function), expect.any(Function), 'rong-jie');
+  });
   it('ignores an end event following an error so the readable fallback is not cut short', () => {
     let end!: () => void;
     let error!: () => void;
@@ -112,6 +120,62 @@ describe('prologue playback', () => {
 });
 
 describe('browser Chinese narration', () => {
+  function voice(name: string, lang = 'zh-CN', localService = true, voiceURI = name) {
+    return { name, lang, localService, voiceURI, default: false } as SpeechSynthesisVoice;
+  }
+
+  it('assigns actual distinct voices by character regardless of list order', () => {
+    const mentor = voice('Microsoft Huihui');
+    const player = voice('Microsoft Kangkang');
+    for (const voices of [[player, mentor], [mentor, player]]) {
+      expect(selectPrologueVoices(voices)).toEqual({ 'rong-jie': mentor, player });
+    }
+  });
+
+  it('prefers local Mandarin, ignores aliases, and uses two unknown voices when available', () => {
+    const mentor = voice('Voice A', 'zh-TW');
+    const player = voice('Voice B', 'zh-TW');
+    const alias = voice('Alias A', 'zh-TW', true, mentor.voiceURI);
+    expect(selectPrologueVoices([
+      voice('Microsoft Xiaoxiao Online', 'zh-CN', false), voice('Tracy', 'zh-HK'),
+      mentor, alias, player, voice('English', 'en-US'),
+    ])).toEqual({ 'rong-jie': mentor, player });
+  });
+
+  it('does not invent voices when only one or no Chinese voice is exposed', () => {
+    const only = voice('Only Chinese');
+    expect(selectPrologueVoices([only])).toEqual({ 'rong-jie': only, player: only });
+    expect(selectPrologueVoices([voice('English', 'en-US')])).toEqual({});
+  });
+
+  it('selects voices lazily for each character, keeps natural pitch, and fails without Chinese voices', () => {
+    class Utterance {
+      lang = ''; rate = 1; pitch = 1; voice: unknown;
+      onend: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      constructor(public text: string) {}
+    }
+    const spoken: Utterance[] = [];
+    let voices: SpeechSynthesisVoice[] = [];
+    vi.stubGlobal('window', {
+      SpeechSynthesisUtterance: Utterance,
+      speechSynthesis: { getVoices: () => voices, speak: (u: Utterance) => spoken.push(u), cancel: vi.fn() },
+    });
+    const speech = createBrowserPrologueSpeech()!;
+    const error = vi.fn();
+    speech.speak('開場', () => {}, error, 'player');
+    expect(error).toHaveBeenCalledOnce();
+    expect(spoken).toHaveLength(0);
+    const mentor = voice('Microsoft Huihui');
+    const player = voice('Microsoft Kangkang');
+    voices = [player, mentor];
+    speech.speak('慢慢來。', () => {}, error, 'rong-jie');
+    speech.speak('好，我試試。', () => {}, error, 'player');
+    expect(spoken.map(u => u.voice)).toEqual([mentor, player]);
+    expect(spoken.map(u => u.pitch)).toEqual([1, 1]);
+    expect(spoken[0].rate).toBeLessThan(spoken[1].rate);
+  });
+
   it('is optional on browsers without speech APIs', () => {
     vi.stubGlobal('window', {});
     expect(createBrowserPrologueSpeech()).toBeUndefined();
@@ -148,6 +212,27 @@ describe('browser Chinese narration', () => {
 });
 
 describe('intro skip and next lifecycle', () => {
+  it('speaks only the localized dialogue and supplies the stable actor identity', () => {
+    let locale = 'zh-Hant';
+    vi.stubGlobal('window', { localStorage: { getItem: () => locale, setItem: (_key: string, value: string) => { locale = value; } } });
+    vi.stubGlobal('document', { hidden: false, documentElement: { lang: '' } });
+    for (const locale of ['zh-Hant', 'zh-Hans'] as const) {
+      setLocale(locale);
+      const scene = new IntroScene() as unknown as {
+        index: number; voiceEnabled: boolean; playCard(): void; playback: { play: ReturnType<typeof vi.fn> };
+      };
+      scene.voiceEnabled = true;
+      scene.playback = { play: vi.fn() };
+      for (let index = 0; index < prologueCards.length; index++) {
+        scene.index = index;
+        scene.playCard();
+        expect(scene.playback.play).toHaveBeenLastCalledWith(prologueCopy('Body', index), true, prologueCards[index].actor);
+        expect(prologueCopy('Body', index)).not.toMatch(/蓉姐|拿起|推到|[「」“”]/);
+      }
+    }
+    setLocale('zh-Hant');
+    for (const card of prologueCards) expect(card.body).not.toMatch(/蓉姐|拿起|推到|[「」“”]/);
+  });
   function sceneHarness() {
     const scene = new IntroScene() as unknown as {
       advance(): void; beginWorld(): void; showCard(): void;

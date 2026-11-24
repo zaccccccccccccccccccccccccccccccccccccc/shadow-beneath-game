@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { spokenDialogue } from './dialogue-copy';
 import { trackSceneLoading, sceneAssetsFailed } from './scene-loading';
 import playerVerticalArt from '../assets/player-vertical-walk-v2.png';
 import { playerVerticalMetrics, getPlayerVerticalRuntimeModel } from './player-vertical-metrics';
@@ -190,7 +191,7 @@ export class WorldScene extends Phaser.Scene {
   private player!: Phaser.GameObjects.Container;
   private areaActors: Phaser.GameObjects.Container[] = [];
   private wallFronts: Phaser.GameObjects.Image[] = [];
-  private roofFronts: Array<{image:Phaser.GameObjects.Image; mask:Phaser.GameObjects.Graphics}> = [];
+  private roofFronts: Array<{image:Phaser.GameObjects.Image}> = [];
   private portalMarkers: Array<{ portal: WorldPortal; glow: Phaser.GameObjects.Ellipse; slab: Phaser.GameObjects.Rectangle; inset: Phaser.GameObjects.Rectangle; rune: Phaser.GameObjects.Text; label: Phaser.GameObjects.Text }> = [];
   private actorSprite!: Phaser.GameObjects.Sprite;
   private facing: Facing = 'back';
@@ -551,7 +552,7 @@ export class WorldScene extends Phaser.Scene {
     this.areaActors = [];
     this.wallFronts.forEach((wall) => wall.destroy());
     this.wallFronts = [];
-    this.roofFronts.forEach(({image,mask})=>{image.destroy();mask.destroy();});
+    this.roofFronts.forEach(({image})=>image.destroy());
     this.roofFronts=[];
     this.portalMarkers.forEach(({ glow }) => this.tweens.killTweensOf(glow));
     this.portalMarkers = [];
@@ -649,15 +650,21 @@ export class WorldScene extends Phaser.Scene {
   private addWallFronts(area: RegionId, blockers: typeof districtMaps[RegionId]['blockers']): void {
     const occluders=districtMaps[area].occluders;
     if (occluders) {
-      for (const shape of occluders) {
-        const mask=this.make.graphics({x:0,y:0}).fillStyle(0xffffff);
-        mask.beginPath();
+      for (const [index, shape] of occluders.entries()) {
+        const key=`roof-patch-${area}-${index}`;
         const points=shape.polygon ?? [{x:shape.x,y:shape.y},{x:shape.x+shape.width,y:shape.y},{x:shape.x+shape.width,y:shape.y+shape.height},{x:shape.x,y:shape.y+shape.height}];
-        mask.moveTo(points[0].x,points[0].y);
-        points.slice(1).forEach(point=>mask.lineTo(point.x,point.y));
-        mask.closePath();mask.fillPath();
-        const image=this.add.image(0,0,`district-${area}`).setOrigin(0).setDisplaySize(DISTRICT_WIDTH,DISTRICT_HEIGHT).setDepth(22).setMask(mask.createGeometryMask());
-        this.roofFronts.push({image,mask});
+        if (!this.textures.exists(key)) {
+          const texture=this.textures.createCanvas(key,Math.ceil(shape.width),Math.ceil(shape.height));
+          if (!texture) throw new Error('Unable to create roof patch');
+          const ctx=texture.context;
+          ctx.save();ctx.beginPath();ctx.moveTo(points[0].x-shape.x,points[0].y-shape.y);
+          points.slice(1).forEach(point=>ctx.lineTo(point.x-shape.x,point.y-shape.y));
+          ctx.closePath();ctx.clip();
+          ctx.drawImage(this.textures.get(`district-${area}`).getSourceImage() as HTMLImageElement,-shape.x,-shape.y,DISTRICT_WIDTH,DISTRICT_HEIGHT);
+          ctx.restore();texture.refresh();
+        }
+        const image=this.add.image(shape.x,shape.y,key).setOrigin(0).setDepth(22);
+        this.roofFronts.push({image});
       }
       return;
     }
@@ -972,7 +979,7 @@ export class WorldScene extends Phaser.Scene {
       // Left movement is their exact horizontal mirror so each leg exchange matches.
       const sprite = getSideWalkSprite(this.facing, this.gaitDistance);
       this.actorSprite.setTexture('player-side-approved', sprite.frame).setFlipX(sprite.flipX).setOrigin(.5,1);
-      this.actorSprite.setDisplaySize(PLAYER_DISPLAY_WIDTH[this.facing], PLAYER_DISPLAY_HEIGHT).setPosition(sprite.offsetX, 4).setAngle(0);
+      this.actorSprite.setScale(PLAYER_DISPLAY_HEIGHT / 627).setPosition(sprite.offsetX, 4).setAngle(0);
       return;
     }
     if (this.walking && (this.facing==='front'||this.facing==='back')) {
@@ -987,7 +994,7 @@ export class WorldScene extends Phaser.Scene {
       ? getVerticalWalkRow(this.gaitDistance)
       : (Math.floor(this.time.now / 220) % 19 === 0 ? 3 : 0);
     this.actorSprite.setTexture('player-walk-cycle', row * 4 + col).setFlipX(false).setOrigin(.5,1)
-      .setDisplaySize(PLAYER_DISPLAY_WIDTH[this.facing], PLAYER_DISPLAY_HEIGHT).setPosition(0, 0).setAngle(0);
+      .setScale(PLAYER_DISPLAY_HEIGHT / 313).setPosition(0, 0).setAngle(0);
   }
 
   private updateNearby(): void {
@@ -1122,6 +1129,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private drawDialogue(item: WorldInteraction, body: string, choices: InteractionChoice[] | null): void {
+    body = spokenDialogue(body);
     const layer = this.dialogueLayer;
     if (!layer) return;
     this.activeDialogueActions = choices?.map(choice => () => this.chooseDialogue(item, choice)) ?? [];

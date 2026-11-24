@@ -9,24 +9,40 @@
   <body data-game-ui="gate">
     <main id="app" aria-label="陰影之下遊戲畫面"></main>
     <section id="profile-gate" aria-label="設定調查員名稱">
+      <div class="gate-layout">
+      <header class="gate-heading">
+      <span class="gate-edition" aria-hidden="true">MACAU · AFTER DARK</span>
       <p id="gate-kicker" class="gate-kicker">監察組 · 見習檔案</p>
       <h1 id="game-title">陰影之下</h1>
+      <span class="gate-rule" aria-hidden="true"></span>
+      </header>
+      <div class="gate-panel">
       <p id="gate-help">請留下你的調查員名字。</p>
+      <div class="gate-fields">
+      <div class="gate-field">
       <label id="name-label" for="player-name">調查員名稱</label>
-      <input id="player-name" maxlength="12" value="見習生" autocomplete="nickname" />
+      <input id="player-name" maxlength="12" value="見習生" autocomplete="nickname" aria-describedby="gate-help" />
+      </div>
+      <div class="gate-field">
       <label id="language-label" for="game-locale">顯示語言</label>
       <select id="game-locale">
         <option value="zh-Hant">繁體中文</option>
         <option value="zh-Hans">简体中文</option>
       </select>
+      </div>
+      </div>
       <label class="music-setting" for="music-enabled">
         <input id="music-enabled" type="checkbox" checked />
         <span id="music-label">背景音樂</span>
       </label>
       <button id="start-game" type="button" disabled>進入檔案</button>
       <button id="continue-game" type="button" disabled hidden>繼續調查</button>
+      <div class="gate-extras">
       <button id="view-character-gallery" type="button" disabled>人物表情檔案預覽</button>
       <button id="start-walk-lab" type="button" disabled>測試靈獸步態</button>
+      </div>
+      </div>
+      </div>
     </section>
     <section id="asset-loading" role="status" aria-live="polite" data-visible="false">
       <div class="asset-loading-card">

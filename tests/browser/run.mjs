@@ -110,7 +110,7 @@ try {
     const { context, page, errors } = await openCase(resumeFixture(), 'fresh', { touch: true });
     try {
       assert.equal(await page.evaluate(key => localStorage.getItem(key), SAVE.claimed), null);
-      const voice = page.getByRole('button', { name: /中文[語语]音/ });
+      const voice = page.getByRole('button', { name: /(?:中文|系統|系统)[語语]音/ });
       let voiceResult = 'unavailable';
       if (await voice.count() && await voice.isEnabled()) {
         await voice.tap();

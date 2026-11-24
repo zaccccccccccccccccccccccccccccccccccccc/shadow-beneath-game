@@ -8,7 +8,7 @@ import { getPlayerName } from './profile';
 import { getLocale, localizedText, prologueCopy, t } from './localization';
 import { setMusicZone } from './music';
 import { wrapCjkText } from './text-layout';
-import { createBrowserPrologueSpeech, createProloguePlayback } from './prologue-voice';
+import { createBrowserPrologueSpeech, createProloguePlayback, selectPrologueVoices } from './prologue-voice';
 
 const WIDTH = 1600;
 const HEIGHT = 900;
@@ -80,19 +80,12 @@ export class IntroScene extends Phaser.Scene {
   }
 
   private cardCopy(kind: 'Kicker' | 'Title' | 'Body'): string {
-    // prologueCopy currently clamps to card three despite all five translations existing.
-    // Resolve the last two here to keep this change inside IntroScene's owned scope.
-    if (this.index < 3) return prologueCopy(kind, this.index);
-    const keys = [
-      { Kicker: 'prologueKicker4', Title: 'prologueTitle4', Body: 'prologueBody4' },
-      { Kicker: 'prologueKicker5', Title: 'prologueTitle5', Body: 'prologueBody5' },
-    ] as const;
-    return t(keys[this.index - 3][kind]);
+    return prologueCopy(kind, this.index);
   }
 
   private playCard(): void {
     if (this.transitioning || this.advancing || document.hidden) return;
-    this.playback?.play(`${this.cardCopy('Title')}。${this.cardCopy('Body')}`, this.voiceEnabled);
+    this.playback?.play(this.cardCopy('Body'), this.voiceEnabled, prologueCards[this.index].actor);
   }
 
   private createControls(): void {
@@ -121,16 +114,29 @@ export class IntroScene extends Phaser.Scene {
     };
     const supported = Boolean(window.speechSynthesis && window.SpeechSynthesisUtterance);
     const voiceLabel = () => simplified
-      ? `中文语音：${this.voiceEnabled ? '开' : '关（点击开启）'}`
-      : `中文語音：${this.voiceEnabled ? '開' : '關（點擊開啟）'}`;
+      ? `系统语音：${this.voiceEnabled ? '开' : '关（点击开启）'}`
+      : `系統語音：${this.voiceEnabled ? '開' : '關（點擊開啟）'}`;
     const voice = button(voiceLabel(), () => {
       if (this.transitioning) return;
       this.voiceEnabled = !this.voiceEnabled;
-      voice.textContent = voiceLabel();
+      updateVoiceStatus();
       voice.setAttribute('aria-pressed', String(this.voiceEnabled));
       // Invoke speak synchronously inside the gesture; do not wait for voiceschanged.
       this.playCard();
     });
+    const updateVoiceStatus = () => {
+      if (!supported) return;
+      const cast = selectPrologueVoices(window.speechSynthesis.getVoices());
+      const count = new Set(Object.values(cast)).size;
+      const status = count > 1 ? (simplified ? '双声线' : '雙聲線')
+        : count === 1 ? (simplified ? '单声线共用' : '單聲線共用')
+          : (simplified ? '暂无中文语音 · 自动阅读' : '暫無中文語音 · 自動閱讀');
+      voice.textContent = `${voiceLabel()} · ${status}`;
+      voice.title = Object.entries(cast).map(([actor, selected]) =>
+        `${actor === 'rong-jie' ? '蓉姐' : '你'}：${selected.name} (${selected.localService ? '本機 / local' : '線上 / remote'})`).join('\n');
+    };
+    updateVoiceStatus();
+    window.speechSynthesis?.addEventListener('voiceschanged', updateVoiceStatus);
     voice.setAttribute('aria-pressed', 'false');
     if (!supported) {
       voice.disabled = true;
@@ -166,6 +172,7 @@ export class IntroScene extends Phaser.Scene {
       document.removeEventListener('visibilitychange', visibility);
       window.removeEventListener('pagehide', pagehide);
       window.removeEventListener('pageshow', pageshow);
+      window.speechSynthesis?.removeEventListener('voiceschanged', updateVoiceStatus);
     });
   }
 

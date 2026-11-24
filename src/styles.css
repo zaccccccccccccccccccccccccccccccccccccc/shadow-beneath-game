@@ -2,3 +2,210 @@
 
 
 .asset-loading-card button{display:block;width:100%;min-height:48px;margin-top:12px;padding:12px;border:1px solid #ecc766;background:#ecc766;color:#102631;font:inherit;font-weight:700;cursor:pointer}.asset-loading-card button[hidden]{display:none}
+
+/* Title screen: keep all decoration inside the removable profile gate. */
+#profile-gate {
+  inset: 0;
+  width: 100%;
+  max-height: none;
+  padding: max(40px, env(safe-area-inset-top)) max(40px, env(safe-area-inset-right)) max(40px, env(safe-area-inset-bottom)) max(40px, env(safe-area-inset-left));
+  overflow: auto;
+  display: grid;
+  align-items: center;
+  border: 0;
+  border-radius: 0;
+  background: linear-gradient(90deg, #07181ce8 0%, #0b222ba8 45%, #071820ed 100%), linear-gradient(0deg, #07181ce8, transparent 60%), url('./assets/district-old-town.png') center / cover no-repeat;
+  box-shadow: none;
+  isolation: isolate;
+  color-scheme: dark;
+}
+#profile-gate::before {
+  content: '';
+  position: absolute;
+  inset: 18px;
+  z-index: -1;
+  border: 1px solid #d8bb7138;
+  pointer-events: none;
+}
+.gate-layout {
+  width: min(1120px, 100%);
+  margin: auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 420px);
+  align-items: center;
+  gap: clamp(36px, 7vw, 110px);
+}
+.gate-heading { padding-block: 32px; }
+.gate-edition {
+  display: block;
+  margin-bottom: clamp(36px, 7vh, 80px);
+  color: #c8d7d1;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .3em;
+}
+#profile-gate .gate-kicker {
+  margin: 0 0 20px;
+  color: #e9c979;
+  font-size: 13px;
+  letter-spacing: .24em;
+}
+#profile-gate h1 {
+  margin: 0;
+  font-family: 'Noto Serif TC', 'Songti TC', 'PMingLiU', serif;
+  font-size: clamp(48px, 7.2vw, 94px);
+  font-weight: 700;
+  line-height: 1.2;
+  letter-spacing: .08em;
+  text-shadow: 0 4px 32px #000a;
+}
+.gate-rule {
+  display: block;
+  width: 84px;
+  height: 2px;
+  margin-top: 32px;
+  background: linear-gradient(90deg, #edce84, #edce8420);
+}
+.gate-panel {
+  min-width: 0;
+  padding: clamp(24px, 3vw, 36px);
+  border: 1px solid #d8bb715c;
+  border-top: 2px solid #d8bb71;
+  border-radius: 3px;
+  background: linear-gradient(145deg, #18343ced, #0b1e27f5);
+  box-shadow: 0 24px 64px #0005, inset 0 0 0 5px #e9c97904;
+}
+#profile-gate #gate-help {
+  margin: 0 0 24px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid #a8c5bc26;
+  color: #e1e9df;
+  font-size: 15px;
+  line-height: 1.7;
+}
+#profile-gate label {
+  margin: 18px 0 8px;
+  color: #d1c49c;
+  font-size: 12px;
+  letter-spacing: .08em;
+}
+#profile-gate input:not([type='checkbox']),
+#profile-gate select {
+  min-height: 48px;
+  padding: 11px 12px;
+  border: 1px solid #6b8e8d80;
+  border-radius: 3px;
+  background: #071a23b3;
+  color: #f8edd8;
+  font: inherit;
+  font-size: 16px;
+  transition: border-color .18s, background-color .18s;
+}
+#profile-gate .music-setting {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  margin: 12px 0 8px;
+  color: #c2d3cc;
+  cursor: pointer;
+}
+#profile-gate #music-enabled {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  padding: 0;
+  accent-color: #ecc766;
+  cursor: pointer;
+}
+#profile-gate button {
+  min-height: 48px;
+  margin-top: 10px;
+  padding: 12px 14px;
+  border: 1px solid #f3d58d;
+  border-radius: 3px;
+  color: #152e35;
+  background: linear-gradient(135deg, #f3d58d, #d7b15e);
+  font-size: 15px;
+  line-height: 1.5;
+  transition: background-color .18s, border-color .18s, box-shadow .18s;
+}
+#profile-gate #continue-game {
+  border-color: #9bb9ad8c;
+  color: #eee2bf;
+  background: #26454b80;
+}
+.gate-extras {
+  display: grid;
+  gap: 4px;
+  margin-top: 22px;
+  padding-top: 14px;
+  border-top: 1px solid #a8c5bc26;
+}
+#profile-gate .gate-extras button {
+  margin: 0;
+  min-height: 44px;
+  padding: 8px 10px;
+  border-color: transparent;
+  background: transparent;
+  color: #bdcfc7;
+  font-size: 13px;
+  font-weight: 400;
+}
+#profile-gate button[hidden] { display: none; }
+#profile-gate button:disabled { opacity: .55; }
+#profile-gate :is(input, select, button):focus-visible {
+  outline: 2px solid #ffde91;
+  outline-offset: 4px;
+}
+@media (hover: hover) {
+  #profile-gate button:enabled:hover { box-shadow: 0 0 22px #ecc76624; border-color: #fff0c4; }
+  #profile-gate .gate-extras button:enabled:hover { background: #8eb6aa14; color: #ffe5a3; }
+  #profile-gate :is(input:not([type='checkbox']), select):hover { border-color: #abc6b9; }
+}
+@media (max-width: 760px) {
+  #profile-gate {
+    padding: max(32px, env(safe-area-inset-top)) max(24px, env(safe-area-inset-right)) max(32px, env(safe-area-inset-bottom)) max(24px, env(safe-area-inset-left));
+    background-position: 38% center;
+  }
+  #profile-gate::before { inset: 10px; }
+  .gate-layout { max-width: 460px; grid-template-columns: minmax(0, 1fr); gap: 24px; }
+  .gate-heading { padding: 8px 0 0; text-align: center; }
+  .gate-edition { margin-bottom: 24px; font-size: 10px; }
+  #profile-gate .gate-kicker { margin-bottom: 12px; font-size: 12px; }
+  #profile-gate h1 { font-size: clamp(42px, 10vw, 66px); }
+  .gate-rule { margin: 20px auto 0; width: 56px; }
+}
+@media (max-height: 600px) and (min-width: 761px) {
+  #profile-gate { padding: max(16px, env(safe-area-inset-top)) max(36px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(36px, env(safe-area-inset-left)); }
+  .gate-layout { gap: 36px; grid-template-columns: minmax(0, 1fr) minmax(340px, 440px); }
+  .gate-edition { margin-bottom: 32px; }
+  .gate-panel { padding: 18px 24px; }
+  #profile-gate #gate-help { padding-bottom: 10px; margin-bottom: 10px; }
+  .gate-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .gate-field { min-width: 0; }
+  #profile-gate label { margin-top: 8px; }
+  #profile-gate .music-setting { margin-block: 4px; }
+  .gate-extras { margin-top: 12px; padding-top: 8px; grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 760px) and (max-height: 700px) {
+  #profile-gate { padding-top: max(20px, env(safe-area-inset-top)); padding-bottom: max(20px, env(safe-area-inset-bottom)); }
+  .gate-layout { gap: 16px; }
+  .gate-heading { padding-top: 0; }
+  .gate-edition { margin-bottom: 10px; }
+  #profile-gate .gate-kicker { margin-bottom: 8px; }
+  #profile-gate h1 { font-size: 38px; }
+  .gate-rule { margin-top: 12px; }
+  .gate-panel { padding: 16px; }
+  #profile-gate #gate-help { margin-bottom: 10px; padding-bottom: 10px; font-size: 14px; }
+  #profile-gate label { margin-top: 10px; }
+  #profile-gate input:not([type='checkbox']), #profile-gate select { min-height: 44px; padding-block: 8px; }
+  #profile-gate .gate-panel .music-setting { margin: 4px 0; }
+  #profile-gate button { min-height: 44px; padding-block: 10px; }
+  .gate-extras { margin-top: 12px; padding-top: 8px; gap: 0; grid-template-columns: 1fr 1fr; }
+  #profile-gate .gate-extras button { padding-inline: 4px; font-size: 12px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #profile-gate :is(input, select, button) { transition: none; }
+}
