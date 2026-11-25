@@ -30,7 +30,7 @@ export function selectPrologueVoices(voices: readonly SpeechSynthesisVoice[]): P
 }
 
 export interface PrologueSpeech {
-  speak(text: string, end: () => void, error: () => void, speaker?: PrologueSpeaker): void;
+  speak(text: string, end: () => void, error: () => void, speaker?: PrologueSpeaker, started?: () => void): void;
   cancel(): void;
 }
 
@@ -40,7 +40,7 @@ export function createBrowserPrologueSpeech(): PrologueSpeech | undefined {
   const synth = window.speechSynthesis;
   let active: SpeechSynthesisUtterance | undefined;
   return {
-    speak(text, end, error, speaker = 'rong-jie'): void {
+    speak(text, end, error, speaker = 'rong-jie', started): void {
       const voice = selectPrologueVoices(synth.getVoices())[speaker];
       // Do not let an English default voice read Chinese, or invent a missing voice.
       if (!voice) { error(); return; }
@@ -50,13 +50,17 @@ export function createBrowserPrologueSpeech(): PrologueSpeech | undefined {
       utterance.voice = voice;
       utterance.rate = characterProfiles[speaker].rate;
       utterance.pitch = 1;
+      utterance.volume = 1;
       utterance.onend = end;
+      utterance.onstart = () => started?.();
       utterance.onerror = error;
+      synth.resume();
       synth.speak(utterance);
     },
     cancel(): void {
       if (!active) return;
       active.onend = null;
+      active.onstart = null;
       active.onerror = null;
       active = undefined;
       synth.cancel();

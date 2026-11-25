@@ -159,7 +159,7 @@ describe('browser Chinese narration', () => {
     let voices: SpeechSynthesisVoice[] = [];
     vi.stubGlobal('window', {
       SpeechSynthesisUtterance: Utterance,
-      speechSynthesis: { getVoices: () => voices, speak: (u: Utterance) => spoken.push(u), cancel: vi.fn() },
+      speechSynthesis: { getVoices: () => voices, speak: (u: Utterance) => spoken.push(u), cancel: vi.fn(), resume: vi.fn() },
     });
     const speech = createBrowserPrologueSpeech()!;
     const error = vi.fn();
@@ -193,6 +193,7 @@ describe('browser Chinese narration', () => {
     vi.stubGlobal('window', {
       SpeechSynthesisUtterance: Utterance,
       speechSynthesis: {
+        resume: vi.fn(),
         getVoices: () => voices,
         speak: (utterance: Utterance) => { spoken = utterance; },
         cancel: () => { spoken.onend?.(); },

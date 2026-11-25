@@ -231,13 +231,13 @@ async function run() {
         assert.equal(await fresh.page.evaluate(key => localStorage.getItem(key), SAVE.claimed), null);
         assert.equal(await fresh.page.evaluate(key => localStorage.getItem(key), SAVE.chapter), null);
         assert.equal(await fresh.page.locator('#mobile-controls').isVisible(), false);
-        const voice = fresh.page.getByRole('button', { name: /中文[語语]音/ });
+        const voice = fresh.page.getByRole('button', { name: /(?:中文|系統|系统)[語语]音/ });
         let voiceResult = 'unavailable on device';
         if (await voice.count() && await voice.isEnabled()) {
           await voice.tap();
-          assert.equal(await voice.getAttribute('aria-pressed'), 'true');
-          await voice.tap();
           assert.equal(await voice.getAttribute('aria-pressed'), 'false');
+          await voice.tap();
+          assert.equal(await voice.getAttribute('aria-pressed'), 'true');
           voiceResult = 'real touch toggled on/off';
         }
         await snapshot(fresh.page, 'intro-voice-controls');
@@ -267,6 +267,16 @@ async function run() {
     const dialogue = await openPage(dialogueSave);
     try {
       await step('npc-dialogue-end-talk', dialogue.page, async () => {
+        await dialogue.page.evaluate(() => {
+          window.voiceAudit = [];
+          const original = speechSynthesis.speak.bind(speechSynthesis);
+          speechSynthesis.speak = utterance => {
+            window.voiceAudit.push({event:'request',text:utterance.text,voice:utterance.voice?.name});
+            utterance.addEventListener('start',()=>window.voiceAudit.push({event:'start'}));
+            utterance.addEventListener('error',event=>window.voiceAudit.push({event:'error',error:event.error}));
+            original(utterance);
+          };
+        });
         await dialogue.page.locator('#continue-game').tap();
         await waitUi(dialogue.page, 'world', 45000);
         await controlsReachable(dialogue.page);
@@ -278,14 +288,24 @@ async function run() {
         // A trusted tap on the on-screen mentor, not a direct scene method call.
         await tapCanvas(dialogue.page, npc.x, npc.y);
         await waitUi(dialogue.page, 'dialogue');
+        const voiceControls = dialogue.page.locator('#dialogue-voice-controls');
+        assert.equal(await voiceControls.isVisible(), true, 'NPC dialogue must expose real voice controls');
+        await voiceControls.getByRole('button', { name: '語音：開', exact: true }).tap();
+        assert.equal(await dialogue.page.evaluate(() => localStorage.getItem('under-shadow-dialogue-voice-enabled')), 'false');
+        await voiceControls.getByRole('button', { name: /朗讀／重播/ }).tap();
+        assert.equal(await dialogue.page.evaluate(() => localStorage.getItem('under-shadow-dialogue-voice-enabled')), 'true');
+        await dialogue.page.waitForFunction(() => window.voiceAudit.some(event => event.event === 'start'), null, {timeout:15000});
+        const voiceAudit = await dialogue.page.evaluate(() => window.voiceAudit);
+        assert.ok(voiceAudit.some(event => event.event === 'request' && event.text.includes('先別急')));
         assert.equal(await dialogue.page.locator('#mobile-controls').isVisible(), false);
         await snapshot(dialogue.page, 'npc-dialogue-open');
         // Production touch layout places the persistent "結束交談" button here.
         await tapCanvas(dialogue.page, 1370, 490);
         await waitUi(dialogue.page, 'world');
+        assert.equal(await voiceControls.isVisible(), false, 'Closing dialogue must remove playback UI and cancel speech');
         await controlsReachable(dialogue.page);
         assert.deepEqual(dialogue.errors, []);
-        return { checkpoint: saved.position, npc: 'mentor', tappedAt: npc, endTalk: { x: 1370, y: 490 } };
+        return { checkpoint: saved.position, npc: 'mentor', tappedAt: npc, endTalk: { x: 1370, y: 490 }, voiceAudit };
       });
     } finally { await dialogue.context.close(); }
 

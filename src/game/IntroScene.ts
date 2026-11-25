@@ -1,4 +1,5 @@
 import Phaser from 'phaser';
+import { isDialogueVoiceEnabled, setDialogueVoiceEnabled } from './dialogue-voice';
 import { trackSceneLoading, sceneAssetsFailed } from './scene-loading';
 import tutorialBackground from '../assets/tutorial-courtyard.png';
 import protagonistBust from '../assets/character-protagonist-expressions.png';
@@ -37,7 +38,7 @@ export class IntroScene extends Phaser.Scene {
     this.index = 0;
     this.transitioning = false;
     this.advancing = false;
-    this.voiceEnabled = false;
+    this.voiceEnabled = isDialogueVoiceEnabled();
     this.playback = createProloguePlayback({ advance: () => this.advance(), speech: createBrowserPrologueSpeech() });
     this.createControls();
     setMusicZone('tutorial');
@@ -119,6 +120,7 @@ export class IntroScene extends Phaser.Scene {
     const voice = button(voiceLabel(), () => {
       if (this.transitioning) return;
       this.voiceEnabled = !this.voiceEnabled;
+      setDialogueVoiceEnabled(this.voiceEnabled);
       updateVoiceStatus();
       voice.setAttribute('aria-pressed', String(this.voiceEnabled));
       // Invoke speak synchronously inside the gesture; do not wait for voiceschanged.
@@ -137,7 +139,7 @@ export class IntroScene extends Phaser.Scene {
     };
     updateVoiceStatus();
     window.speechSynthesis?.addEventListener('voiceschanged', updateVoiceStatus);
-    voice.setAttribute('aria-pressed', 'false');
+    voice.setAttribute('aria-pressed', String(this.voiceEnabled));
     if (!supported) {
       voice.disabled = true;
       voice.textContent = simplified ? '语音不可用 · 自动阅读' : '語音不可用 · 自動閱讀';

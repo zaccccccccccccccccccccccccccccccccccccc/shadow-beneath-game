@@ -209,3 +209,5 @@
 @media (prefers-reduced-motion: reduce) {
   #profile-gate :is(input, select, button) { transition: none; }
 }
+
+#dialogue-voice-controls{position:fixed;z-index:130;top:max(12px,env(safe-area-inset-top));left:50%;transform:translateX(-50%);display:flex;align-items:center;gap:8px;padding:8px 12px;background:#102631f5;border:1px solid #deb86a;border-radius:10px;max-width:94vw;flex-wrap:wrap}#dialogue-voice-controls[hidden]{display:none}#dialogue-voice-controls button{min-height:44px;padding:8px 14px;background:#e6c36d;color:#102631;border:0;border-radius:6px;font:inherit;cursor:pointer}#dialogue-voice-controls span{font-size:13px;color:#f8edd8}

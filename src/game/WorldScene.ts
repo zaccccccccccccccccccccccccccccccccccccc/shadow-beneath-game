@@ -1,5 +1,6 @@
 import Phaser from 'phaser';
 import { spokenDialogue } from './dialogue-copy';
+import { createDialogueVoiceControls } from './dialogue-voice';
 import { trackSceneLoading, sceneAssetsFailed } from './scene-loading';
 import playerVerticalArt from '../assets/player-vertical-walk-v2.png';
 import { playerVerticalMetrics, getPlayerVerticalRuntimeModel } from './player-vertical-metrics';
@@ -98,6 +99,7 @@ type Facing = 'front' | 'back' | 'left' | 'right';
 interface Objective { key: CopyKey; complete: boolean; target?: string; title?: string }
 
 export class WorldScene extends Phaser.Scene {
+  private dialogueVoice?: ReturnType<typeof createDialogueVoiceControls>;
   private chapter: 1 | 2 | 3 | 4 | 5 | 6 = 1;
   private lateProgress: Record<LateActNumber, LateProgress> = { 4: emptyLateProgress(), 5: emptyLateProgress(), 6: emptyLateProgress() };
   private lateFollowers = new Map<SpiritId, Phaser.GameObjects.Sprite>();
@@ -741,6 +743,8 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private createDialogueControls(): void {
+    this.dialogueVoice = createDialogueVoiceControls();
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.dialogueVoice?.destroy());
     this.input.keyboard?.on('keydown-P', () => this.companionLayer ? this.closeCompanionPanel() : this.openCompanionRoster());
     this.mapToggle = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.M);
     this.notebookToggle = this.input.keyboard!.addKey(Phaser.Input.Keyboard.KeyCodes.L);
@@ -1130,6 +1134,7 @@ export class WorldScene extends Phaser.Scene {
 
   private drawDialogue(item: WorldInteraction, body: string, choices: InteractionChoice[] | null): void {
     body = spokenDialogue(body);
+    this.dialogueVoice?.show(body, item.id === 'mentor' ? 'rong-jie' : 'player');
     const layer = this.dialogueLayer;
     if (!layer) return;
     this.activeDialogueActions = choices?.map(choice => () => this.chooseDialogue(item, choice)) ?? [];
@@ -1237,6 +1242,7 @@ export class WorldScene extends Phaser.Scene {
   }
 
   private advanceDialogue(): void {
+    this.dialogueVoice?.hide();
     const finishedInformant = this.activeInteraction?.id === 'informant' && this.tutorial.informant;
     this.dialogueLayer?.destroy(true);
     this.dialogueLayer = null;

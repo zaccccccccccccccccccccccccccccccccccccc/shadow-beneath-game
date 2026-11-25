@@ -114,9 +114,9 @@ try {
       let voiceResult = 'unavailable';
       if (await voice.count() && await voice.isEnabled()) {
         await voice.tap();
-        assert.equal(await voice.getAttribute('aria-pressed'), 'true');
-        await voice.tap();
         assert.equal(await voice.getAttribute('aria-pressed'), 'false');
+        await voice.tap();
+        assert.equal(await voice.getAttribute('aria-pressed'), 'true');
         voiceResult = 'on/off toggled via real touch; audible output is not asserted';
       }
       await page.screenshot({ path: path.join(output, 'intro.png'), fullPage: true });
